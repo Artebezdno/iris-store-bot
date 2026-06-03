@@ -1,6 +1,8 @@
 import os
 import asyncio
 import uuid
+import time
+import requests
 from threading import Thread
 
 from flask import Flask
@@ -13,7 +15,9 @@ from aiogram.client.default import DefaultBotProperties
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
+
 REVIEWS_LINK = "https://t.me/IrisStoreMarket"
+SITE_URL = "https://iris-store-bot.onrender.com/"
 
 CARD_NUMBER = "5355 2800 2289 5252"
 BANK_NAME = "PUMB"
@@ -30,6 +34,19 @@ def run_site():
 
 def keep_alive():
     Thread(target=run_site, daemon=True).start()
+
+def auto_ping():
+    while True:
+        try:
+            response = requests.get(SITE_URL, timeout=10)
+            print(f"Ping OK: {response.status_code}")
+        except Exception as e:
+            print("Ping error:", e)
+
+        time.sleep(240)
+
+def start_auto_ping():
+    Thread(target=auto_ping, daemon=True).start()
 
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -261,6 +278,7 @@ async def back_start(call: CallbackQuery):
 
 async def main():
     keep_alive()
+    start_auto_ping()
     print("Iris Store bot started ✅")
     await dp.start_polling(bot)
 
