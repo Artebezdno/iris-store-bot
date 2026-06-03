@@ -13,6 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
+REVIEWS_LINK = "https://t.me/IrisStoreMarket"
 
 CARD_NUMBER = "5355 2800 2289 5252"
 BANK_NAME = "PUMB"
@@ -36,17 +37,18 @@ dp = Dispatcher()
 orders = {}
 waiting_username = {}
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy_iris")]
+def main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy_iris")],
+        [InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK)]
     ])
 
+@dp.message(Command("start"))
+async def start(message: Message):
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
-        "Здесь вы можете быстро купить ириски 🍬\n"
-        "Выберите пакет, укажите username получателя и отправьте скрин оплаты.",
-        reply_markup=keyboard
+        "Здесь вы можете быстро купить ириски 🍬",
+        reply_markup=main_menu()
     )
 
 @dp.callback_query(F.data == "buy_iris")
@@ -252,14 +254,10 @@ async def deny_payment(call: CallbackQuery):
 
 @dp.callback_query(F.data == "back_start")
 async def back_start(call: CallbackQuery):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy_iris")]
-    ])
-
     await call.message.edit_text(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬",
-        reply_markup=keyboard
+        reply_markup=main_menu()
     )
 
 async def main():
