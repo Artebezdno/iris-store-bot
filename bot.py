@@ -3,8 +3,6 @@ import asyncio
 import uuid
 from threading import Thread
 
-import keep_alive
-
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -92,11 +90,10 @@ async def choose_pack(call: CallbackQuery):
 
     await call.message.edit_text(
         "🍬 <b>Куда выдать ириски?</b>\n\n"
-        "Пожалуйста, отправьте username получателя, на которого нужно передать ириски.\n\n"
+        "Отправьте username получателя, на которого нужно передать ириски.\n\n"
         "Пример:\n"
         "<code>@Artemwesh</code>\n\n"
-        "⚠️ Укажите username внимательно.\n"
-        "После оплаты ириски будут выданы именно на этот аккаунт."
+        "⚠️ Укажите username внимательно."
     )
 
 @dp.message(F.text.startswith("@"))
