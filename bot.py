@@ -362,14 +362,9 @@ async def approve_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        "🎉 <b>Ириски успешно выданы!</b>
-
-"
-        "🍬 Ваш заказ выполнен.
-"
-        "Спасибо за покупку в <b>Iris Store</b> 💛
-
-"
+        "🎉 <b>Ириски успешно выданы!</b>\n\n"
+        "🍬 Ваш заказ выполнен.\n"
+        "Спасибо за покупку в <b>Iris Store</b> 💛\n\n"
         "⭐ Не забудьте оставить отзыв"
     )
 
