@@ -64,7 +64,8 @@ def main_menu():
         [
             InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK),
             InlineKeyboardButton(text="❓ FAQ", callback_data="faq")
-        ]
+        ],
+        [InlineKeyboardButton(text="💬 Поддержка", callback_data="support")]
     ])
 
 @dp.message(Command("start"))
@@ -98,6 +99,21 @@ async def faq(call: CallbackQuery):
     "— Кнопка «Отзывы» в главном меню.",
     reply_markup=keyboard
 )
+
+
+@dp.callback_query(F.data == "support")
+async def support(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↗️ Написать в поддержку", url="https://t.me/Artemwesh")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
+    ])
+
+    await call.message.edit_text(
+        "💬 <b>Поддержка</b>\n\n"
+        "Если возникли вопросы по оплате, заказу или выдаче ирисок — напишите нам.\n\n"
+        "⏳ Обычно отвечаем быстро",
+        reply_markup=keyboard
+    )
 
 @dp.callback_query(F.data == "buy_iris")
 async def buy_iris(call: CallbackQuery):
