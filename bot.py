@@ -12,6 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
 
 CARD_NUMBER = "5355 2800 2289 5252"
 BANK_NAME = "PUMB"
@@ -211,6 +212,7 @@ async def get_payment_photo(message: Message):
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_payment(call: CallbackQuery):
     user_id = int(call.data.split("_")[1])
+    user_order = orders.get(user_id)
 
     await bot.send_message(
         user_id,
@@ -218,6 +220,16 @@ async def approve_payment(call: CallbackQuery):
         "Ваш заказ одобрен.\n"
         "Ожидайте выдачу ирисок 🍬"
     )
+
+    if user_order:
+        await bot.send_message(
+            CHANNEL_ID,
+            f"✅ Покупатель получил <b>{user_order['item']}</b>\n\n"
+            f"👤 Получатель: {user_order['receiver']}\n"
+            f"🍬 Количество: {user_order['item']}\n"
+            f"💎 Статус: успешно получено\n"
+            f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
+        )
 
     await call.message.edit_caption(
         caption=call.message.caption + "\n\n✅ <b>ОДОБРЕНО</b>"
