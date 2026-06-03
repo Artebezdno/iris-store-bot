@@ -80,6 +80,7 @@ async def start(message: Message):
 @dp.callback_query(F.data == "faq")
 async def faq(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ Почему Iris Store?", callback_data="why_store")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
     ])
 
@@ -100,6 +101,23 @@ async def faq(call: CallbackQuery):
     reply_markup=keyboard
 )
 
+
+
+@dp.callback_query(F.data == "why_store")
+async def why_store(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="faq")]
+    ])
+
+    await call.message.edit_text(
+        "⭐ <b>Почему выбирают Iris Store?</b>\n\n"
+        "✅ Быстрая обработка заказов\n"
+        "💳 Удобная оплата на украинскую карту\n"
+        "🍬 Выдача на username\n"
+        "⭐ Отзывы покупателей\n"
+        "🇺🇦 Украинский продавец",
+        reply_markup=keyboard
+    )
 
 @dp.callback_query(F.data == "support")
 async def support(call: CallbackQuery):
@@ -344,9 +362,15 @@ async def approve_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        "✅ <b>Оплата подтверждена!</b>\n\n"
-        "Ваш заказ одобрен.\n"
-        "Ожидайте выдачу ирисок 🍬"
+        "🎉 <b>Ириски успешно выданы!</b>
+
+"
+        "🍬 Ваш заказ выполнен.
+"
+        "Спасибо за покупку в <b>Iris Store</b> 💛
+
+"
+        "⭐ Не забудьте оставить отзыв"
     )
 
     await bot.send_message(
