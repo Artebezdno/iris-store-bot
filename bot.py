@@ -3,6 +3,8 @@ import asyncio
 import uuid
 from threading import Thread
 
+import keep_alive
+
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
