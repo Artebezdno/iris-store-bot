@@ -51,7 +51,11 @@ def start_auto_ping():
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# orders — текущий заказ пользователя
+# orders_by_id — все заказы, чтобы кнопки Одобрить/Отклонить работали правильно,
+# даже если пользователь уже выбрал новый пакет.
 orders = {}
+orders_by_id = {}
 waiting_username = {}
 
 def main_menu():
@@ -94,15 +98,21 @@ async def choose_pack(call: CallbackQuery):
     item, price = packs[call.data]
     order_id = str(uuid.uuid4())[:13]
 
-    orders[call.from_user.id] = {
+    new_order = {
+        "buyer_id": call.from_user.id,
         "buyer_username": call.from_user.username,
         "buyer_name": call.from_user.full_name,
         "item": item,
         "price": price,
         "order_id": order_id,
-        "receiver": None
+        "receiver": None,
+        "status": "new"
     }
 
+    # Новый выбранный пакет становится текущим заказом.
+    # Старые заказы остаются в orders_by_id, чтобы админ мог их одобрить/отклонить.
+    orders[call.from_user.id] = new_order
+    orders_by_id[order_id] = new_order
     waiting_username[call.from_user.id] = True
 
     await call.message.edit_text(
@@ -131,6 +141,7 @@ async def get_receiver_username(message: Message):
         return
 
     user_order["receiver"] = receiver
+    user_order["status"] = "waiting_payment"
     waiting_username[message.from_user.id] = False
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -177,6 +188,22 @@ async def paid(call: CallbackQuery):
         await call.message.answer("❌ Сначала укажите username получателя.")
         return
 
+    if user_order.get("status") == "pending":
+        await call.message.answer(
+            "⏳ Ваш чек уже находится на проверке.\n"
+            "Пожалуйста, дождитесь решения администратора."
+        )
+        return
+
+    if user_order.get("status") == "approved":
+        await call.message.answer(
+            "✅ Этот заказ уже одобрен.\n"
+            "Чтобы купить ещё, выберите новый пакет."
+        )
+        return
+
+    user_order["status"] = "waiting_photo"
+
     await call.message.answer(
         "📸 Теперь отправьте сюда скриншот или фото чека оплаты.\n\n"
         "После этого админ проверит оплату вручную."
@@ -191,14 +218,37 @@ async def get_payment_photo(message: Message):
         return
 
     if not user_order.get("receiver"):
-        await message.answer("❌ Сначала отправьте username получателя.")
+        await message.answer(
+            "❌ Сначала отправьте username получателя.\n\n"
+            "Пример:\n"
+            "<code>@Artemwesh</code>"
+        )
         return
+
+    # Если по текущему заказу уже отправлен чек — второй скрин не отправляем админу.
+    if user_order.get("status") == "pending":
+        await message.answer(
+            "⏳ Ваш чек уже находится на проверке.\n"
+            "Пожалуйста, дождитесь решения администратора."
+        )
+        return
+
+    if user_order.get("status") == "approved":
+        await message.answer(
+            "✅ Этот заказ уже одобрен.\n"
+            "Чтобы купить ещё, выберите новый пакет."
+        )
+        return
+
+    # Первый скрин по текущему заказу
+    user_order["status"] = "pending"
 
     buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
 
     await message.answer(
         "✅ Скрин оплаты получен.\n"
-        "Ожидайте проверку администратором."
+        "⏳ Заказ отправлен на проверку.\n"
+        "Ожидайте администратора."
     )
 
     caption = (
@@ -215,8 +265,14 @@ async def get_payment_photo(message: Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{message.from_user.id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"deny_{message.from_user.id}")
+            InlineKeyboardButton(
+                text="✅ Одобрить",
+                callback_data=f"approve_{user_order['order_id']}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Отклонить",
+                callback_data=f"deny_{user_order['order_id']}"
+            )
         ]
     ])
 
@@ -229,8 +285,19 @@ async def get_payment_photo(message: Message):
 
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_payment(call: CallbackQuery):
-    user_id = int(call.data.split("_")[1])
-    user_order = orders.get(user_id)
+    order_id = call.data.replace("approve_", "", 1)
+    user_order = orders_by_id.get(order_id)
+
+    if not user_order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+
+    if user_order.get("status") == "approved":
+        await call.answer("Этот заказ уже одобрен", show_alert=True)
+        return
+
+    user_order["status"] = "approved"
+    user_id = user_order["buyer_id"]
 
     await bot.send_message(
         user_id,
@@ -239,15 +306,14 @@ async def approve_payment(call: CallbackQuery):
         "Ожидайте выдачу ирисок 🍬"
     )
 
-    if user_order:
-        await bot.send_message(
-            CHANNEL_ID,
-            f"✅ Покупатель получил <b>{user_order['item']}</b>\n\n"
-            f"👤 Получатель: {user_order['receiver']}\n"
-            f"🍬 Количество: {user_order['item']}\n"
-            f"💎 Статус: успешно получено\n"
-            f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
-        )
+    await bot.send_message(
+        CHANNEL_ID,
+        f"✅ Покупатель получил <b>{user_order['item']}</b>\n\n"
+        f"👤 Получатель: {user_order['receiver']}\n"
+        f"🍬 Количество: {user_order['item']}\n"
+        f"💎 Статус: успешно получено\n"
+        f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
+    )
 
     await call.message.edit_caption(
         caption=call.message.caption + "\n\n✅ <b>ОДОБРЕНО</b>"
@@ -255,13 +321,25 @@ async def approve_payment(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("deny_"))
 async def deny_payment(call: CallbackQuery):
-    user_id = int(call.data.split("_")[1])
+    order_id = call.data.replace("deny_", "", 1)
+    user_order = orders_by_id.get(order_id)
+
+    if not user_order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+
+    if user_order.get("status") == "denied":
+        await call.answer("Этот заказ уже отклонён", show_alert=True)
+        return
+
+    user_order["status"] = "denied"
+    user_id = user_order["buyer_id"]
 
     await bot.send_message(
         user_id,
         "❌ <b>Оплата отклонена</b>\n\n"
         "Скрин не прошёл проверку.\n"
-        "Попробуйте отправить новый чек."
+        "Вы можете отправить новый чек или выбрать новый пакет."
     )
 
     await call.message.edit_caption(
