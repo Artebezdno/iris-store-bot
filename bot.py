@@ -43,8 +43,7 @@ async def start(message: Message):
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬\n"
-        "Выберите нужный пакет, оплатите и отправьте скрин оплаты.\n\n"
-        "Нажмите кнопку ниже 👇",
+        "Выберите пакет, оплатите и отправьте скрин оплаты.",
         reply_markup=keyboard
     )
 
@@ -103,19 +102,12 @@ async def choose_pack(call: CallbackQuery):
         "1. Переведите точную сумму на карту выше\n"
         "2. Нажмите кнопку «✅ Я оплатил»\n"
         "3. Отправьте скриншот или фото чека\n\n"
-        "⏳ Проверка выполняется администратором вручную.\n"
-        "После проверки вы получите чек на ириски.",
+        "⏳ Проверка выполняется администратором вручную.",
         reply_markup=keyboard
     )
 
 @dp.callback_query(F.data == "paid")
 async def paid(call: CallbackQuery):
-    user_order = orders.get(call.from_user.id)
-
-    if not user_order:
-        await call.message.answer("❌ Сначала выберите пакет ирисок.")
-        return
-
     await call.message.answer(
         "📸 Теперь отправьте сюда скриншот или фото чека оплаты.\n\n"
         "После этого админ проверит оплату вручную."
@@ -126,7 +118,7 @@ async def get_payment_photo(message: Message):
     user_order = orders.get(message.from_user.id)
 
     if not user_order:
-        await message.answer("❌ Сначала нажмите «Купить ириски» и выберите пакет.")
+        await message.answer("❌ Сначала выберите пакет ирисок.")
         return
 
     username = f"@{user_order['username']}" if user_order["username"] else "нет username"
@@ -147,10 +139,48 @@ async def get_payment_photo(message: Message):
         "📸 Скрин оплаты:"
     )
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{message.from_user.id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"deny_{message.from_user.id}")
+        ]
+    ])
+
     await bot.send_photo(
         ADMIN_ID,
         photo=message.photo[-1].file_id,
-        caption=caption
+        caption=caption,
+        reply_markup=keyboard
+    )
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def approve_payment(call: CallbackQuery):
+    user_id = int(call.data.split("_")[1])
+
+    await bot.send_message(
+        user_id,
+        "✅ <b>Оплата подтверждена!</b>\n\n"
+        "Ваш заказ одобрен.\n"
+        "Ожидайте выдачу ирисок 🍬"
+    )
+
+    await call.message.edit_caption(
+        caption=call.message.caption + "\n\n✅ <b>ОДОБРЕНО</b>"
+    )
+
+@dp.callback_query(F.data.startswith("deny_"))
+async def deny_payment(call: CallbackQuery):
+    user_id = int(call.data.split("_")[1])
+
+    await bot.send_message(
+        user_id,
+        "❌ <b>Оплата отклонена</b>\n\n"
+        "Скрин не прошёл проверку.\n"
+        "Попробуйте отправить новый чек."
+    )
+
+    await call.message.edit_caption(
+        caption=call.message.caption + "\n\n❌ <b>ОТКЛОНЕНО</b>"
     )
 
 @dp.callback_query(F.data == "back_start")
@@ -161,8 +191,7 @@ async def back_start(call: CallbackQuery):
 
     await call.message.edit_text(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
-        "Здесь вы можете быстро купить ириски 🍬\n"
-        "Выберите нужный пакет, оплатите и отправьте скрин оплаты.",
+        "Здесь вы можете быстро купить ириски 🍬",
         reply_markup=keyboard
     )
 
