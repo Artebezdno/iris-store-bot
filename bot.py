@@ -61,7 +61,10 @@ waiting_username = {}
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy_iris")],
-        [InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK)]
+        [
+            InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK),
+            InlineKeyboardButton(text="❓ FAQ", callback_data="faq")
+        ]
     ])
 
 @dp.message(Command("start"))
@@ -70,6 +73,28 @@ async def start(message: Message):
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬",
         reply_markup=main_menu()
+    )
+
+
+@dp.callback_query(F.data == "faq")
+async def faq(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
+    ])
+
+    await call.message.edit_text(
+        "❓ <b>FAQ / Частые вопросы</b>\n\n"
+        "💳 <b>Как купить?</b>\n"
+        "— Выберите пакет, укажите username, оплатите и отправьте чек.\n\n"
+        "⏳ <b>Сколько ждать?</b>\n"
+        "— Обычно 5–30 минут.\n\n"
+        "🍬 <b>Куда придут ириски?</b>\n"
+        "— На username, который вы указали.\n\n"
+        "📸 <b>Отправил чек — что дальше?</b>\n"
+        "— Ожидайте проверки администратора.\n\n"
+        "⭐ <b>Где отзывы?</b>\n"
+        "— Кнопка «Отзывы» в главном меню.",
+        reply_markup=keyboard
     )
 
 @dp.callback_query(F.data == "buy_iris")
