@@ -33,6 +33,7 @@ bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 orders = {}
+waiting_username = {}
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -43,57 +44,87 @@ async def start(message: Message):
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬\n"
-        "Выберите пакет, оплатите и отправьте скрин оплаты.",
+        "Выберите пакет, укажите username получателя и отправьте скрин оплаты.",
         reply_markup=keyboard
     )
 
 @dp.callback_query(F.data == "buy_iris")
 async def buy_iris(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="35 ирисок — 50 грн", callback_data="pack_35")],
-        [InlineKeyboardButton(text="80 ирисок — 100 грн", callback_data="pack_80")],
-        [InlineKeyboardButton(text="170 ирисок — 200 грн", callback_data="pack_170")],
+        [InlineKeyboardButton(text="🍬 50 ирисок — 45 грн", callback_data="pack_50")],
+        [InlineKeyboardButton(text="🍬 100 ирисок — 85 грн", callback_data="pack_100")],
+        [InlineKeyboardButton(text="🍬 500 ирисок — 400 грн", callback_data="pack_500")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
     ])
 
     await call.message.edit_text(
         "🍬 <b>Выберите пакет ирисок:</b>\n\n"
-        "После выбора бот покажет реквизиты для оплаты.",
+        "После выбора нужно будет указать username получателя.",
         reply_markup=keyboard
     )
 
 @dp.callback_query(F.data.startswith("pack_"))
 async def choose_pack(call: CallbackQuery):
     packs = {
-        "pack_35": ("35 ирисок", "50 грн"),
-        "pack_80": ("80 ирисок", "100 грн"),
-        "pack_170": ("170 ирисок", "200 грн")
+        "pack_50": ("50 ирисок", "45 грн"),
+        "pack_100": ("100 ирисок", "85 грн"),
+        "pack_500": ("500 ирисок", "400 грн")
     }
 
     item, price = packs[call.data]
     order_id = str(uuid.uuid4())[:13]
 
     orders[call.from_user.id] = {
-        "username": call.from_user.username,
-        "name": call.from_user.full_name,
+        "buyer_username": call.from_user.username,
+        "buyer_name": call.from_user.full_name,
         "item": item,
         "price": price,
-        "order_id": order_id
+        "order_id": order_id,
+        "receiver": None
     }
+
+    waiting_username[call.from_user.id] = True
+
+    await call.message.edit_text(
+        "🍬 <b>Куда выдать ириски?</b>\n\n"
+        "Пожалуйста, отправьте username получателя, на которого нужно передать ириски.\n\n"
+        "Пример:\n"
+        "<code>@Artemwesh</code>\n\n"
+        "⚠️ Укажите username внимательно.\n"
+        "После оплаты ириски будут выданы именно на этот аккаунт."
+    )
+
+@dp.message(F.text.startswith("@"))
+async def get_receiver_username(message: Message):
+    if not waiting_username.get(message.from_user.id):
+        return
+
+    user_order = orders.get(message.from_user.id)
+
+    if not user_order:
+        await message.answer("❌ Сначала выберите пакет ирисок.")
+        return
+
+    receiver = message.text.strip()
+
+    if len(receiver) < 5:
+        await message.answer("❌ Username слишком короткий. Пример: @Artemwesh")
+        return
+
+    user_order["receiver"] = receiver
+    waiting_username[message.from_user.id] = False
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="buy_iris")]
     ])
 
-    username = call.from_user.username or "без username"
-
-    await call.message.edit_text(
+    await message.answer(
         "💳 <b>Оплата переводом на украинскую карту</b>\n\n"
-        f"🧾 Заказ: <code>#{order_id}</code>\n"
-        f"🍬 Товар: <b>{item}</b>\n"
-        f"👤 Покупатель: @{username}\n"
-        f"💰 К оплате: <b>{price}</b>\n\n"
+        f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n"
+        f"🍬 Товар: <b>{user_order['item']}</b>\n"
+        f"👤 Получатель: <b>{receiver}</b>\n"
+        f"💰 К оплате: <b>{user_order['price']}</b>\n\n"
         "🏦 <b>Реквизиты для перевода</b>\n\n"
         f"• Банк: <b>{BANK_NAME}</b>\n"
         f"• Номер карты: <code>{CARD_NUMBER}</code>\n"
@@ -106,8 +137,27 @@ async def choose_pack(call: CallbackQuery):
         reply_markup=keyboard
     )
 
+@dp.message(F.text)
+async def wrong_username(message: Message):
+    if waiting_username.get(message.from_user.id):
+        await message.answer(
+            "❌ Отправьте username в правильном формате.\n\n"
+            "Пример:\n"
+            "<code>@Artemwesh</code>"
+        )
+
 @dp.callback_query(F.data == "paid")
 async def paid(call: CallbackQuery):
+    user_order = orders.get(call.from_user.id)
+
+    if not user_order:
+        await call.message.answer("❌ Сначала выберите пакет ирисок.")
+        return
+
+    if not user_order.get("receiver"):
+        await call.message.answer("❌ Сначала укажите username получателя.")
+        return
+
     await call.message.answer(
         "📸 Теперь отправьте сюда скриншот или фото чека оплаты.\n\n"
         "После этого админ проверит оплату вручную."
@@ -121,7 +171,11 @@ async def get_payment_photo(message: Message):
         await message.answer("❌ Сначала выберите пакет ирисок.")
         return
 
-    username = f"@{user_order['username']}" if user_order["username"] else "нет username"
+    if not user_order.get("receiver"):
+        await message.answer("❌ Сначала отправьте username получателя.")
+        return
+
+    buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
 
     await message.answer(
         "✅ Скрин оплаты получен.\n"
@@ -131,10 +185,11 @@ async def get_payment_photo(message: Message):
     caption = (
         "🧾 <b>Новая оплата</b>\n\n"
         f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n"
-        f"👤 Имя: <b>{user_order['name']}</b>\n"
-        f"🔗 Username: {username}\n"
-        f"🆔 ID: <code>{message.from_user.id}</code>\n"
+        f"👤 Покупатель: <b>{user_order['buyer_name']}</b>\n"
+        f"🔗 Username покупателя: {buyer_username}\n"
+        f"🆔 ID покупателя: <code>{message.from_user.id}</code>\n"
         f"🍬 Товар: <b>{user_order['item']}</b>\n"
+        f"🎯 Выдать на: <b>{user_order['receiver']}</b>\n"
         f"💰 Сумма: <b>{user_order['price']}</b>\n\n"
         "📸 Скрин оплаты:"
     )
