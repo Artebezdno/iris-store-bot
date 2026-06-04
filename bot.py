@@ -370,11 +370,11 @@ async def get_payment_photo(message: Message):
         [
             InlineKeyboardButton(
                 text="✅ Одобрить",
-                callback_data=f"approve_{user_order['order_id']}"
+                callback_data=f"approve_{message.from_user.id}_{user_order['order_id']}"
             ),
             InlineKeyboardButton(
                 text="❌ Отказаться",
-                callback_data=f"deny_{user_order['order_id']}"
+                callback_data=f"deny_{message.from_user.id}_{user_order['order_id']}"
             )
         ]
     ])
@@ -386,21 +386,48 @@ async def get_payment_photo(message: Message):
         reply_markup=keyboard
     )
 
+def get_value_from_caption(caption: str, label: str):
+    for line in (caption or "").splitlines():
+        if label in line:
+            value = line.split(":", 1)[-1].strip()
+            value = value.replace("<b>", "").replace("</b>", "")
+            value = value.replace("<code>", "").replace("</code>", "")
+            return value
+    return "не указано"
+
+
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_payment(call: CallbackQuery):
-    order_id = call.data.replace("approve_", "", 1)
+    data = call.data.replace("approve_", "", 1)
+    parts = data.split("_", 1)
+
+    if len(parts) == 2:
+        user_id = int(parts[0])
+        order_id = parts[1]
+    else:
+        # На всякий случай поддержка старых кнопок
+        order_id = data
+        user_order_old = orders_by_id.get(order_id)
+        if not user_order_old:
+            await call.answer("Заказ не найден", show_alert=True)
+            return
+        user_id = user_order_old["buyer_id"]
+
     user_order = orders_by_id.get(order_id)
 
-    if not user_order:
-        await call.answer("Заказ не найден", show_alert=True)
-        return
-
-    if user_order.get("status") == "approved":
+    if user_order and user_order.get("status") == "approved":
         await call.answer("Этот заказ уже одобрен", show_alert=True)
         return
 
-    user_order["status"] = "approved"
-    user_id = user_order["buyer_id"]
+    if user_order:
+        user_order["status"] = "approved"
+        item = user_order["item"]
+        receiver = user_order["receiver"]
+    else:
+        # Если бот перезапустился, берём данные из текста заявки админу.
+        caption = call.message.caption or ""
+        item = get_value_from_caption(caption, "🍬 Товар")
+        receiver = get_value_from_caption(caption, "🎯 Выдать на")
 
     await bot.send_message(
         user_id,
@@ -412,32 +439,43 @@ async def approve_payment(call: CallbackQuery):
 
     await bot.send_message(
         CHANNEL_ID,
-        f"✅ Покупатель получил <b>{user_order['item']}</b>\n\n"
-        f"👤 Получатель: {user_order['receiver']}\n"
-        f"🍬 Количество: {user_order['item']}\n"
+        f"✅ Покупатель получил <b>{item}</b>\n\n"
+        f"👤 Получатель: {receiver}\n"
+        f"🍬 Количество: {item}\n"
         f"💎 Статус: успешно получено\n"
         f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
     )
 
     await call.message.edit_caption(
-        caption=call.message.caption + "\n\n✅ <b>ОДОБРЕНО</b>"
+        caption=(call.message.caption or "") + "\n\n✅ <b>ОДОБРЕНО</b>"
     )
+
 
 @dp.callback_query(F.data.startswith("deny_"))
 async def deny_payment(call: CallbackQuery):
-    order_id = call.data.replace("deny_", "", 1)
+    data = call.data.replace("deny_", "", 1)
+    parts = data.split("_", 1)
+
+    if len(parts) == 2:
+        user_id = int(parts[0])
+        order_id = parts[1]
+    else:
+        # На всякий случай поддержка старых кнопок
+        order_id = data
+        user_order_old = orders_by_id.get(order_id)
+        if not user_order_old:
+            await call.answer("Заказ не найден", show_alert=True)
+            return
+        user_id = user_order_old["buyer_id"]
+
     user_order = orders_by_id.get(order_id)
 
-    if not user_order:
-        await call.answer("Заказ не найден", show_alert=True)
-        return
-
-    if user_order.get("status") == "denied":
+    if user_order and user_order.get("status") == "denied":
         await call.answer("Этот заказ уже отклонён", show_alert=True)
         return
 
-    user_order["status"] = "denied"
-    user_id = user_order["buyer_id"]
+    if user_order:
+        user_order["status"] = "denied"
 
     await bot.send_message(
         user_id,
@@ -447,7 +485,7 @@ async def deny_payment(call: CallbackQuery):
     )
 
     await call.message.edit_caption(
-        caption=call.message.caption + "\n\n❌ <b>ОТКЛОНЕНО</b>"
+        caption=(call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>"
     )
 
 @dp.callback_query(F.data == "back_start")
