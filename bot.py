@@ -230,19 +230,31 @@ async def get_receiver_username(message: Message):
 
     await message.answer(
         "💳 <b>Оплата переводом на украинскую карту</b>\n\n"
-        f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n"
-        f"🍬 Товар: <b>{user_order['item']}</b>\n"
-        f"👤 Получатель: <b>{receiver}</b>\n"
-        f"💰 К оплате: <b>{user_order['price']}</b>\n\n"
+
+        "<blockquote>"
+        f"🧾 <b>Заказ:</b> #{user_order['order_id']}\n"
+        f"🍬 <b>Товар:</b> {user_order['item']}\n"
+        f"👤 <b>Получатель:</b> {receiver}\n"
+        f"💰 <b>К оплате:</b> {user_order['price']}"
+        "</blockquote>\n\n"
+
         "🏦 <b>Реквизиты для перевода</b>\n\n"
-        f"• Банк: <b>{BANK_NAME}</b>\n"
-        f"• Номер карты: <code>{CARD_NUMBER}</code>\n"
-        "• Получатель: <b>Не указан</b>\n\n"
-        "❗ <b>Что нужно сделать</b>\n\n"
+
+        "<blockquote>"
+        f"• <b>Банк:</b> {BANK_NAME}\n"
+        f"• <b>Номер карты:</b> <code>{CARD_NUMBER}</code>\n"
+        "• <b>Получатель:</b> Не указан"
+        "</blockquote>\n\n"
+
+        "🤖 <b>Что нужно сделать</b>\n\n"
+
+        "<blockquote>"
         "1. Переведите точную сумму на карту выше\n"
         "2. Нажмите кнопку «✅ Я оплатил»\n"
-        "3. Отправьте скриншот или фото чека\n\n"
-        "⏳ Проверка выполняется администратором вручную.",
+        "3. Отправьте скриншот или фото чека"
+        "</blockquote>\n\n"
+
+        "ℹ️ <i>Проверка выполняется администратором вручную.</i>",
         reply_markup=keyboard
     )
 
