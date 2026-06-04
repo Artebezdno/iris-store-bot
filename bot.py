@@ -81,6 +81,7 @@ async def start(message: Message):
 async def faq(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐ Почему Iris Store?", callback_data="why_store")],
+        [InlineKeyboardButton(text="🛡️ Гарантия", callback_data="guarantee")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
     ])
 
@@ -116,6 +117,23 @@ async def why_store(call: CallbackQuery):
         "🍬 Выдача на username\n"
         "⭐ Отзывы покупателей\n"
         "🇺🇦 Украинский продавец",
+        reply_markup=keyboard
+    )
+
+
+@dp.callback_query(F.data == "guarantee")
+async def guarantee(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="faq")]
+    ])
+
+    await call.message.edit_text(
+        "🛡️ <b>Гарантия Iris Store</b>\n\n"
+        "🍬 Заказы проверяются вручную\n\n"
+        "✅ Ириски выдаются на указанный username\n\n"
+        "💬 При вопросах поддержка поможет\n\n"
+        "📸 Каждый чек проверяется администратором\n\n"
+        "⚠️ Проверяйте username внимательно перед оплатой.",
         reply_markup=keyboard
     )
 
