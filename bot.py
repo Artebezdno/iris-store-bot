@@ -58,6 +58,10 @@ orders = {}
 orders_by_id = {}
 waiting_username = {}
 
+
+def make_order_id():
+    return f"IRIS{1000 + (uuid.uuid4().int % 9000)}"
+
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy_iris")],
@@ -177,7 +181,7 @@ async def choose_pack(call: CallbackQuery):
     }
 
     item, price = packs[call.data]
-    order_id = str(uuid.uuid4())[:13]
+    order_id = make_order_id()
 
     new_order = {
         "buyer_id": call.from_user.id,
@@ -351,15 +355,15 @@ async def get_payment_photo(message: Message):
     )
 
     caption = (
-        "🧾 <b>Новая оплата</b>\n\n"
-        f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n"
+        "🚨 <b>НОВЫЙ ЗАКАЗ</b>\n\n"
+        f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n\n"
         f"👤 Покупатель: <b>{user_order['buyer_name']}</b>\n"
-        f"🔗 Username покупателя: {buyer_username}\n"
-        f"🆔 ID покупателя: <code>{message.from_user.id}</code>\n"
+        f"🔗 Username: {buyer_username}\n"
+        f"🆔 ID: <code>{message.from_user.id}</code>\n\n"
         f"🍬 Товар: <b>{user_order['item']}</b>\n"
         f"🎯 Выдать на: <b>{user_order['receiver']}</b>\n"
         f"💰 Сумма: <b>{user_order['price']}</b>\n\n"
-        "📸 Скрин оплаты:"
+        "📸 Чек оплаты:"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -369,7 +373,7 @@ async def get_payment_photo(message: Message):
                 callback_data=f"approve_{user_order['order_id']}"
             ),
             InlineKeyboardButton(
-                text="❌ Отклонить",
+                text="❌ Отказаться",
                 callback_data=f"deny_{user_order['order_id']}"
             )
         ]
