@@ -438,13 +438,13 @@ async def approve_payment(call: CallbackQuery):
     )
 
     await bot.send_message(
-        CHANNEL_ID,
-        f"✅ Покупатель получил <b>{item}</b>\n\n"
-        f"👤 Получатель: {receiver}\n"
-        f"🍬 Количество: {item}\n"
-        f"💎 Статус: успешно получено\n"
-        f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
-    )
+    CHANNEL_ID,
+    f"✅ Покупатель получил ириски\n\n"
+    f"👤 Получатель: {receiver.replace('@', '')}\n"
+    f"🍬 Количество: {item}\n"
+    f"💎 Статус: успешно получено\n\n"
+    f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
+)
 
     await call.message.edit_caption(
         caption=(call.message.caption or "") + "\n\n✅ <b>ОДОБРЕНО</b>"
