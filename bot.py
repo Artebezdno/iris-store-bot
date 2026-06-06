@@ -158,16 +158,18 @@ async def support(call: CallbackQuery):
 @dp.callback_query(F.data == "buy_iris")
 async def buy_iris(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍬 50 ирисок 45 грн", callback_data="pack_50")],
-        [InlineKeyboardButton(text="🍬 100 ирисок 85 грн", callback_data="pack_100")],
-        [InlineKeyboardButton(text="🍬 500 ирисок 400 грн", callback_data="pack_500")],
-        [InlineKeyboardButton(text="🍬 1000 ирисок 800 грн", callback_data="pack_1000")],
+        [InlineKeyboardButton(text="🍬 50 ирисок — 45 грн", callback_data="pack_50")],
+        [InlineKeyboardButton(text="🍬 100 ирисок — 89 грн", callback_data="pack_100")],
+        [InlineKeyboardButton(text="🍬 500 ирисок — 430 грн", callback_data="pack_500")],
+        [InlineKeyboardButton(text="🍬 1000 ирисок — 850 грн", callback_data="pack_1000")],
+        [InlineKeyboardButton(text="🍬 2000 ирисок — 1670 грн", callback_data="pack_2000")],
+        [InlineKeyboardButton(text="🍬 5000 ирисок — 4150 грн", callback_data="pack_5000")],
+        [InlineKeyboardButton(text="🍬 10000 ирисок — 8200 грн", callback_data="pack_10000")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
     ])
 
     await call.message.edit_text(
-        "🍬 <b>Выберите пакет ирисок:</b>\n\n"
-        "После выбора нужно будет указать username получателя.",
+        "🍬 <b>Выберите пакет ирисок:</b>",
         reply_markup=keyboard
     )
 
@@ -175,9 +177,12 @@ async def buy_iris(call: CallbackQuery):
 async def choose_pack(call: CallbackQuery):
     packs = {
         "pack_50": ("50 ирисок", "45 грн"),
-        "pack_100": ("100 ирисок", "85 грн"),
-        "pack_500": ("500 ирисок", "400 грн"),
-        "pack_1000": ("1000 ирисок", "800 грн")
+        "pack_100": ("100 ирисок", "89 грн"),
+        "pack_500": ("500 ирисок", "430 грн"),
+        "pack_1000": ("1000 ирисок", "850 грн"),
+        "pack_2000": ("2000 ирисок", "1670 грн"),
+        "pack_5000": ("5000 ирисок", "4150 грн"),
+        "pack_10000": ("10000 ирисок", "8200 грн")
     }
 
     item, price = packs[call.data]
@@ -504,9 +509,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# EXTRA BUY BUTTONS
-
-🍬 2000 ирисок — 1670 грн
-🍬 5000 ирисок — 4150 грн
-🍬 10000 ирисок — 8200 грн
