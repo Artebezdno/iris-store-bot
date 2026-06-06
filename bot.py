@@ -422,12 +422,12 @@ async def approve_payment(call: CallbackQuery):
     if user_order:
         user_order["status"] = "approved"
         item = user_order["item"]
-        receiver = user_order["receiver"]
+        receiver = user_order.get("buyer_name") or user_order.get("receiver") or "не указано"
     else:
         # Если бот перезапустился, берём данные из текста заявки админу.
         caption = call.message.caption or ""
         item = get_value_from_caption(caption, "🍬 Товар")
-        receiver = get_value_from_caption(caption, "🎯 Выдать на")
+        receiver = get_value_from_caption(caption, "👤 Покупатель")
 
     await bot.send_message(
         user_id,
@@ -438,13 +438,13 @@ async def approve_payment(call: CallbackQuery):
     )
 
     await bot.send_message(
-CHANNEL_ID,
-f”✅ Покупатель получил ириски\n\n”
-f”👤 Получатель: {receiver.replace(’@’, ‘’).capitalize()}\n”
-f”🍬 Количество: {item}\n”
-f”💎 Статус: успешно получено\n\n”
-f”🛍️ Спасибо за покупку в Iris Store”
-)
+        CHANNEL_ID,
+        f"✅ <b>Покупатель получил ириски</b>\n\n"
+        f"👤 Получатель: {receiver}\n"
+        f"🍬 Количество: {item}\n"
+        f"💎 Статус: успешно получено\n\n"
+        f"🛍️ Спасибо за покупку в <b>Iris Store</b>"
+    )
 
     await call.message.edit_caption(
         caption=(call.message.caption or "") + "\n\n✅ <b>ОДОБРЕНО</b>"
