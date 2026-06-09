@@ -278,6 +278,51 @@ async def get_receiver_username(message: Message):
 
 @dp.message(F.text)
 async def text_router(message: Message):
+
+    # Умные слова: прайс / помощь / статус / карта
+    user_text = (message.text or "").lower().strip()
+
+    if user_text in ["прайс", "цены", "цена", "сколько стоит", "стоимость"]:
+        await message.answer(
+            "🍬 <b>Прайс Iris Store</b>\n\n"
+            "50 — 45 грн\n"
+            "100 — 89 грн\n"
+            "500 — 425 грн\n"
+            "1000 — 845 грн\n"
+            "2000 — 1660 грн\n"
+            "5000 — 4100 грн\n"
+            "10000 — 8100 грн\n\n"
+            "🛍️ Для покупки нажмите: 🍬 Купить ириски"
+        )
+        return
+
+    if user_text in ["помощь", "поддержка", "админ", "проблема"]:
+        await message.answer(
+            "💬 <b>Поддержка Iris Store</b>\n\n"
+            "Если возникла проблема — напишите администратору:\n\n"
+            "@Artemwesh\n\n"
+            "📌 Желательно укажите номер заказа."
+        )
+        return
+
+    if user_text in ["статус", "заказ", "проверить заказ"]:
+        await message.answer(
+            "🧾 <b>Проверка заказа</b>\n\n"
+            "Отправьте номер заказа:\n\n"
+            "Пример:\n"
+            "<code>#IRIS5091</code>"
+        )
+        return
+
+    if user_text in ["карта", "оплата", "реквизиты", "номер карты"]:
+        await message.answer(
+            "💳 <b>Реквизиты для оплаты</b>\n\n"
+            "Банк: PUMB\n\n"
+            "<code>5355 2800 2289 5252</code>\n\n"
+            "⚠️ После оплаты обязательно отправьте чек."
+        )
+        return
+
     text = (message.text or "").strip().upper()
 
     # Проверка заказа по номеру: #IRIS8791
@@ -600,57 +645,6 @@ async def back_start(call: CallbackQuery):
         "Здесь вы можете быстро купить ириски 🍬",
         reply_markup=main_menu()
     )
-
-
-@dp.message(F.text)
-async def smart_words(message: Message):
-    text = (message.text or "").lower().strip()
-
-    # Прайс
-    if text in ["прайс", "цены", "цена", "сколько стоит", "стоимость"]:
-        await message.answer(
-            "🍬 <b>Прайс Iris Store</b>\n\n"
-            "50 — 45 грн\n"
-            "100 — 89 грн\n"
-            "500 — 425 грн\n"
-            "1000 — 845 грн\n"
-            "2000 — 1660 грн\n"
-            "5000 — 4100 грн\n"
-            "10000 — 8100 грн\n\n"
-            "🛍️ Для покупки нажмите: 🍬 Купить ириски"
-        )
-        return
-
-    # Поддержка
-    if text in ["помощь", "поддержка", "админ", "проблема"]:
-        await message.answer(
-            "💬 <b>Поддержка Iris Store</b>\n\n"
-            "Если возникла проблема —\n"
-            "напишите администратору:\n\n"
-            "@Artemwesh\n\n"
-            "📌 Желательно укажите номер заказа."
-        )
-        return
-
-    # Статус заказа
-    if text in ["статус", "заказ", "проверить заказ"]:
-        await message.answer(
-            "🧾 <b>Проверка заказа</b>\n\n"
-            "Отправьте номер заказа:\n\n"
-            "Пример:\n"
-            "<code>#IRIS5091</code>"
-        )
-        return
-
-    # Карта
-    if text in ["карта", "оплата", "реквизиты", "номер карты"]:
-        await message.answer(
-            "💳 <b>Реквизиты для оплаты</b>\n\n"
-            "Банк: PUMB\n\n"
-            "5355 2800 2289 5252\n\n"
-            "⚠️ После оплаты обязательно отправьте чек."
-        )
-        return
 
 async def main():
     keep_alive()
