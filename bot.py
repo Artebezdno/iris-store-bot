@@ -2,6 +2,7 @@ import os
 import asyncio
 import uuid
 import time
+import re
 import requests
 from threading import Thread
 
@@ -276,13 +277,58 @@ async def get_receiver_username(message: Message):
     )
 
 @dp.message(F.text)
-async def wrong_username(message: Message):
+async def text_router(message: Message):
+    text = (message.text or "").strip().upper()
+
+    # Проверка заказа по номеру: #IRIS8791
+    if re.match(r"^#?IRIS\d+$", text):
+        order_number = text.replace("#", "").strip().upper()
+        order = orders_by_id.get(order_number)
+
+        if not order:
+            await message.answer("❌ Заказ не найден")
+            return
+
+        status = order.get("status", "pending")
+
+        if status == "viewed":
+            status_text = (
+                "👀 <b>Статус:</b>\n"
+                "Заказ увиден администратором\n\n"
+                "⏳ Ожидайте решение."
+            )
+        elif status == "approved":
+            status_text = (
+                "🟢 <b>Статус:</b>\n"
+                "Успешно выполнен\n\n"
+                "🍬 Ириски успешно выданы."
+            )
+        elif status == "denied":
+            status_text = (
+                "🔴 <b>Статус:</b>\n"
+                "Отклонён\n\n"
+                "💬 Если возникли вопросы — напишите в поддержку."
+            )
+        else:
+            status_text = (
+                "🟡 <b>Статус:</b>\n"
+                "Ещё не просмотрен администратором\n\n"
+                "⏳ Ожидайте проверки."
+            )
+
+        await message.answer(
+            f"🧾 <b>Заказ:</b> <code>#{order_number}</code>\n\n{status_text}"
+        )
+        return
+
+    # Если ждём username, но пользователь написал не @username
     if waiting_username.get(message.from_user.id):
         await message.answer(
             "❌ Отправьте username в правильном формате.\n\n"
             "Пример:\n"
             "<code>@Artemwesh</code>"
         )
+        return
 
 @dp.callback_query(F.data == "paid")
 async def paid(call: CallbackQuery):
@@ -419,41 +465,40 @@ async def view_order(call: CallbackQuery):
     order_id = parts[1]
 
     user_order = orders_by_id.get(order_id)
-    if user_order:
-        user_order["status"] = "viewed"
-
-    await bot.send_message(
-        user_id,
-        f"👀 <b>Администратор уже увидел заказ</b>\n\n"
-        f"🧾 Заказ: <code>#{order_id}</code>\n"
-        "⏳ Ожидайте решения администратора."
-    )
-
-    await call.answer("Заказ взят в обработку")
-
-@dp.message(F.text.regexp(r"^#?IRIS\d+$"))
-async def check_order(message: Message):
-    order_number = message.text.replace("#", "").strip().upper()
-    order = orders_by_id.get(order_number)
-
-    if not order:
-        await message.answer("❌ Заказ не найден")
+    if not user_order:
+        await call.answer("Заказ не найден", show_alert=True)
         return
 
-    status = order.get("status", "pending")
+    if user_order.get("status") == "viewed":
+        await call.answer("Заказ уже отмечен как увиденный", show_alert=True)
+        return
 
-    if status == "viewed":
-        status_text = "👀 <b>Статус:</b>\nАдминистратор уже увидел заказ\n\n⏳ Ожидайте решение."
-    elif status == "approved":
-        status_text = "🟢 <b>Статус:</b>\nУспешно выполнен\n\n🍬 Ириски успешно выданы."
-    elif status == "denied":
-        status_text = "🔴 <b>Статус:</b>\nОтклонён\n\n💬 Если возникли вопросы — напишите в поддержку."
-    else:
-        status_text = "🟡 <b>Статус:</b>\nНа проверке\n\n⏳ Ожидайте решения администратора."
+    user_order["status"] = "viewed"
 
-    await message.answer(
-        f"🧾 <b>Заказ:</b> <code>#{order_number}</code>\n\n{status_text}"
+    # Убираем кнопку «Заказ увиден», оставляем только Одобрить/Отказаться
+    new_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Одобрить",
+                callback_data=f"approve_{user_id}_{order_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Отказаться",
+                callback_data=f"deny_{user_id}_{order_id}"
+            )
+        ]
+    ])
+
+    caption = call.message.caption or ""
+    if "👀 <b>ЗАКАЗ УВИДЕН</b>" not in caption:
+        caption += "\n\n👀 <b>ЗАКАЗ УВИДЕН</b>"
+
+    await call.message.edit_caption(
+        caption=caption,
+        reply_markup=new_keyboard
     )
+
+    await call.answer("Заказ отмечен как увиденный ✅")
 
 
 @dp.callback_query(F.data.startswith("approve_"))
