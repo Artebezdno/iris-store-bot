@@ -374,7 +374,7 @@ async def get_payment_photo(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="👀 Взял в обработку",
+                text="👀 Заказ увиден",
                 callback_data=f"view_{message.from_user.id}_{user_order['order_id']}"
             ),
             InlineKeyboardButton(
