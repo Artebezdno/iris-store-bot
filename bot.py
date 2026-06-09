@@ -294,8 +294,8 @@ async def text_router(message: Message):
         if status == "viewed":
             status_text = (
                 "👀 <b>Статус:</b>\n"
-                "Заказ увиден администратором\n\n"
-                "⏳ Ожидайте решение."
+                "Администратор уже проверяет ваш заказ\n\n"
+                "⏳ Обычно проверка занимает 5–30 минут 💜"
             )
         elif status == "approved":
             status_text = (
