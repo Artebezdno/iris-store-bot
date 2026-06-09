@@ -374,6 +374,10 @@ async def get_payment_photo(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
+                text="👀 Взял в обработку",
+                callback_data=f"view_{message.from_user.id}_{user_order['order_id']}"
+            ),
+            InlineKeyboardButton(
                 text="✅ Одобрить",
                 callback_data=f"approve_{message.from_user.id}_{user_order['order_id']}"
             ),
@@ -399,6 +403,57 @@ def get_value_from_caption(caption: str, label: str):
             value = value.replace("<code>", "").replace("</code>", "")
             return value
     return "не указано"
+
+
+
+@dp.callback_query(F.data.startswith("view_"))
+async def view_order(call: CallbackQuery):
+    data = call.data.replace("view_", "", 1)
+    parts = data.split("_", 1)
+
+    if len(parts) != 2:
+        await call.answer("Ошибка", show_alert=True)
+        return
+
+    user_id = int(parts[0])
+    order_id = parts[1]
+
+    user_order = orders_by_id.get(order_id)
+    if user_order:
+        user_order["status"] = "viewed"
+
+    await bot.send_message(
+        user_id,
+        f"👀 <b>Администратор уже увидел заказ</b>\n\n"
+        f"🧾 Заказ: <code>#{order_id}</code>\n"
+        "⏳ Ожидайте решения администратора."
+    )
+
+    await call.answer("Заказ взят в обработку")
+
+@dp.message(F.text.regexp(r"^#?IRIS\d+$"))
+async def check_order(message: Message):
+    order_number = message.text.replace("#", "").strip().upper()
+    order = orders_by_id.get(order_number)
+
+    if not order:
+        await message.answer("❌ Заказ не найден")
+        return
+
+    status = order.get("status", "pending")
+
+    if status == "viewed":
+        status_text = "👀 <b>Статус:</b>\nАдминистратор уже увидел заказ\n\n⏳ Ожидайте решение."
+    elif status == "approved":
+        status_text = "🟢 <b>Статус:</b>\nУспешно выполнен\n\n🍬 Ириски успешно выданы."
+    elif status == "denied":
+        status_text = "🔴 <b>Статус:</b>\nОтклонён\n\n💬 Если возникли вопросы — напишите в поддержку."
+    else:
+        status_text = "🟡 <b>Статус:</b>\nНа проверке\n\n⏳ Ожидайте решения администратора."
+
+    await message.answer(
+        f"🧾 <b>Заказ:</b> <code>#{order_number}</code>\n\n{status_text}"
+    )
 
 
 @dp.callback_query(F.data.startswith("approve_"))
