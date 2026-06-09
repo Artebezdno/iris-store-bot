@@ -161,11 +161,11 @@ async def buy_iris(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍬 50 ирисок — 45 грн", callback_data="pack_50")],
         [InlineKeyboardButton(text="🍬 100 ирисок — 89 грн", callback_data="pack_100")],
-        [InlineKeyboardButton(text="🍬 500 ирисок — 430 грн", callback_data="pack_500")],
-        [InlineKeyboardButton(text="🍬 1000 ирисок — 850 грн", callback_data="pack_1000")],
-        [InlineKeyboardButton(text="🍬 2000 ирисок — 1670 грн", callback_data="pack_2000")],
-        [InlineKeyboardButton(text="🍬 5000 ирисок — 4150 грн", callback_data="pack_5000")],
-        [InlineKeyboardButton(text="🍬 10000 ирисок — 8200 грн", callback_data="pack_10000")],
+        [InlineKeyboardButton(text="🍬 500 ирисок — 425 грн", callback_data="pack_500")],
+        [InlineKeyboardButton(text="🍬 1000 ирисок — 845 грн", callback_data="pack_1000")],
+        [InlineKeyboardButton(text="🍬 2000 ирисок — 1660 грн", callback_data="pack_2000")],
+        [InlineKeyboardButton(text="🍬 5000 ирисок — 4100 грн", callback_data="pack_5000")],
+        [InlineKeyboardButton(text="🍬 10000 ирисок — 8100 грн", callback_data="pack_10000")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]
     ])
 
@@ -179,11 +179,11 @@ async def choose_pack(call: CallbackQuery):
     packs = {
         "pack_50": ("50 ирисок", "45 грн"),
         "pack_100": ("100 ирисок", "89 грн"),
-        "pack_500": ("500 ирисок", "430 грн"),
-        "pack_1000": ("1000 ирисок", "850 грн"),
-        "pack_2000": ("2000 ирисок", "1670 грн"),
-        "pack_5000": ("5000 ирисок", "4150 грн"),
-        "pack_10000": ("10000 ирисок", "8200 грн")
+        "pack_500": ("500 ирисок", "425 грн"),
+        "pack_1000": ("1000 ирисок", "845 грн"),
+        "pack_2000": ("2000 ирисок", "1660 грн"),
+        "pack_5000": ("5000 ирисок", "4100 грн"),
+        "pack_10000": ("10000 ирисок", "8100 грн")
     }
 
     item, price = packs[call.data]
