@@ -75,18 +75,6 @@ def main_menu():
 
 @dp.message(Command("start"))
 async def start(message: Message):
-    user_id = str(message.from_user.id)
-
-    try:
-        with open("users.txt", "r", encoding="utf-8") as f:
-            users = f.read().splitlines()
-    except:
-        users = []
-
-    if user_id not in users:
-        with open("users.txt", "a", encoding="utf-8") as f:
-            f.write(user_id + "\n")
-
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬",
@@ -657,6 +645,46 @@ async def back_start(call: CallbackQuery):
         "Здесь вы можете быстро купить ириски 🍬",
         reply_markup=main_menu()
     )
+
+
+
+@dp.message(Command("sendall"))
+async def sendall(message: Message):
+    if message.from_user.id != int(ADMIN_ID):
+        return
+
+    text_to_send = message.text.replace("/sendall", "", 1).strip()
+
+    if not text_to_send:
+        await message.answer(
+            "❌ Напишите текст рассылки\n\n"
+            "Пример:\n"
+            "/sendall 🔥 Новые цены на ириски!"
+        )
+        return
+
+    try:
+        with open("users.txt", "r", encoding="utf-8") as f:
+            users = f.read().splitlines()
+    except:
+        users = []
+
+    success = 0
+    failed = 0
+
+    for user_id in users:
+        try:
+            await bot.send_message(int(user_id), text_to_send)
+            success += 1
+        except:
+            failed += 1
+
+    await message.answer(
+        f"✅ Рассылка завершена!\n\n"
+        f"👥 Отправлено: {success}\n"
+        f"❌ Ошибок: {failed}"
+    )
+
 
 async def main():
     keep_alive()
