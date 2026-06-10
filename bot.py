@@ -75,6 +75,18 @@ def main_menu():
 
 @dp.message(Command("start"))
 async def start(message: Message):
+    user_id = str(message.from_user.id)
+
+    try:
+        with open("users.txt", "r", encoding="utf-8") as f:
+            users = f.read().splitlines()
+    except:
+        users = []
+
+    if user_id not in users:
+        with open("users.txt", "a", encoding="utf-8") as f:
+            f.write(user_id + "\n")
+
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬",
