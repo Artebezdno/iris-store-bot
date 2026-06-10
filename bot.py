@@ -276,6 +276,50 @@ async def get_receiver_username(message: Message):
         reply_markup=keyboard
     )
 
+
+@dp.message(Command("sendall"))
+async def sendall(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    text_to_send = message.text.replace("/sendall", "", 1).strip()
+
+    if not text_to_send:
+        await message.answer(
+            "❌ Напишите текст рассылки\n\n"
+            "Пример:\n"
+            "/sendall 🔥 Новые цены на ириски!"
+        )
+        return
+
+    try:
+        with open("users.txt", "r", encoding="utf-8") as f:
+            users = [u.strip() for u in f.read().splitlines() if u.strip()]
+    except:
+        users = []
+
+    if not users:
+        await message.answer("❌ В users.txt пока нет пользователей.")
+        return
+
+    success = 0
+    failed = 0
+
+    for user_id in users:
+        try:
+            await bot.send_message(int(user_id), text_to_send)
+            success += 1
+            await asyncio.sleep(0.05)
+        except:
+            failed += 1
+
+    await message.answer(
+        f"✅ Рассылка завершена!\n\n"
+        f"👥 Отправлено: {success}\n"
+        f"❌ Ошибок: {failed}"
+    )
+
+
 @dp.message(F.text)
 async def text_router(message: Message):
 
@@ -645,46 +689,6 @@ async def back_start(call: CallbackQuery):
         "Здесь вы можете быстро купить ириски 🍬",
         reply_markup=main_menu()
     )
-
-
-
-@dp.message(Command("sendall"))
-async def sendall(message: Message):
-    if message.from_user.id != int(ADMIN_ID):
-        return
-
-    text_to_send = message.text.replace("/sendall", "", 1).strip()
-
-    if not text_to_send:
-        await message.answer(
-            "❌ Напишите текст рассылки\n\n"
-            "Пример:\n"
-            "/sendall 🔥 Новые цены на ириски!"
-        )
-        return
-
-    try:
-        with open("users.txt", "r", encoding="utf-8") as f:
-            users = f.read().splitlines()
-    except:
-        users = []
-
-    success = 0
-    failed = 0
-
-    for user_id in users:
-        try:
-            await bot.send_message(int(user_id), text_to_send)
-            success += 1
-        except:
-            failed += 1
-
-    await message.answer(
-        f"✅ Рассылка завершена!\n\n"
-        f"👥 Отправлено: {success}\n"
-        f"❌ Ошибок: {failed}"
-    )
-
 
 async def main():
     keep_alive()
