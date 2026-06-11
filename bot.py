@@ -4,6 +4,7 @@ import uuid
 import time
 import re
 import requests
+import base64
 from threading import Thread
 
 from flask import Flask
@@ -52,6 +53,44 @@ def start_auto_ping():
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO")
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+
+def save_users_to_github():
+    try:
+        with open("users.txt", "r", encoding="utf-8") as f:
+            content = f.read()
+
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/users.txt"
+
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json"
+        }
+
+        get_file = requests.get(url, headers=headers)
+
+        sha = None
+        if get_file.status_code == 200:
+            sha = get_file.json()["sha"]
+
+        data = {
+            "message": "Update users.txt",
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": GITHUB_BRANCH
+        }
+
+        if sha:
+            data["sha"] = sha
+
+        requests.put(url, headers=headers, json=data)
+
+    except Exception as e:
+        print("GitHub save error:", e)
+
+
 # orders — текущий заказ пользователя
 # orders_by_id — все заказы, чтобы кнопки Одобрить/Отклонить работали правильно,
 # даже если пользователь уже выбрал новый пакет.
@@ -87,6 +126,7 @@ async def start(message: Message):
     if user_id not in users:
         with open("users.txt", "a", encoding="utf-8") as f:
             f.write(user_id + "\n")
+        save_users_to_github()
 
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
