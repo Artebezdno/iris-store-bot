@@ -260,11 +260,11 @@ async def choose_pack(call: CallbackQuery):
     waiting_username[call.from_user.id] = True
 
     await call.message.edit_text(
-        "🍬 <b>Куда выдать ириски?</b>\n\n"
-        "Отправьте username получателя, на которого нужно передать ириски.\n\n"
+        "🍬 <b>Введите username получателя</b>\n\n"
         "Пример:\n"
-        "<code>@Artemwesh</code>\n\n"
-        "⚠️ Укажите username внимательно."
+        "<code>@username</code>\n\n"
+        "⚠️ Проверьте username внимательно.\n"
+        "После выдачи изменить получателя нельзя."
     )
 
 @dp.message(F.text.startswith("@"))
@@ -294,7 +294,7 @@ async def get_receiver_username(message: Message):
     ])
 
     await message.answer(
-        "💳 <b>Оплата переводом на украинскую карту</b>\n\n"
+        "💳 <b>Оплата заказа</b>\n\n"
 
         "<blockquote>"
         f"🧾 <b>Заказ:</b> #{user_order['order_id']}\n"
