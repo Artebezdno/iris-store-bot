@@ -298,27 +298,14 @@ async def get_receiver_username(message: Message):
     ])
 
     await message.answer(
-        "💳 <b>Оплата заказа</b>
-
-"
-        f"🧾 <b>Номер заказа:</b> {user_order['order_id']}
-
-"
-        f"🍬 <b>Товар:</b> {user_order['item']}
-"
-        f"👤 <b>Получатель:</b> {receiver}
-"
-        f"💸 <b>Сумма:</b> {user_order['price']}
-
-"
-        f"🏦 <b>Банк:</b> {BANK_NAME}
-"
-        f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>
-
-"
-        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛
-
-"
+        "💳 <b>Оплата заказа</b>\n\n"
+        f"🧾 <b>Номер заказа:</b> {user_order['order_id']}\n\n"
+        f"🍬 <b>Товар:</b> {user_order['item']}\n"
+        f"👤 <b>Получатель:</b> {receiver}\n"
+        f"💸 <b>Сумма:</b> {user_order['price']}\n\n"
+        f"🏦 <b>Банк:</b> {BANK_NAME}\n"
+        f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>\n\n"
+        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛\n\n"
         "После оплаты нажмите кнопку ниже.",
         reply_markup=keyboard
     )
@@ -493,12 +480,8 @@ async def get_payment_photo(message: Message):
     buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
 
     await message.answer(
-        f"🟡 <b>Заказ {user_order['order_id']}</b>
-
-"
-        "Чек отправлен на проверку.
-
-"
+        f"🟡 <b>Заказ #{user_order['order_id']}</b>\n\n"
+        "Чек отправлен на проверку.\n\n"
         "⏱ Обычно проверка занимает 5–20 минут."
     )
     caption = (
@@ -575,24 +558,23 @@ async def approve_payment(call: CallbackQuery):
         # Если бот перезапустился, берём данные из текста заявки админу.
         caption = call.message.caption or ""
         item = get_value_from_caption(caption, "🍬 Товар")
-        receiver = get_value_from_caption(caption, "🎯 Выдать на")
+        receiver = get_value_from_caption(caption, "🎯 Получатель")
 
     await bot.send_message(
         user_id,
-        f"✅ <b>Заказ #{order_id} выполнен!</b>
-
-"
+        f"✅ <b>Заказ #{order_id} выполнен!</b>\n\n"
         "🍬 Ириски успешно выданы 💜"
     )
 
-await bot.send_message(
-    CHANNEL_ID,
-    f"✅ <b>Покупатель получил ириски</b>\n\n"
-    f"🧾 <b>Номер заказа:</b> #{order_id}\n"
-    f"🍬 <b>Количество:</b> {item}\n"
-    f"💎 <b>Статус:</b> успешно получено\n\n"
-    "🛍️ Спасибо за покупку в <b>Iris Store</b>"
-)
+    await bot.send_message(
+        CHANNEL_ID,
+        f"✅ <b>Покупатель получил ириски</b>\n\n"
+        f"🧾 <b>Номер заказа:</b> #{order_id}\n"
+        f"🍬 <b>Количество:</b> {item}\n"
+        f"👤 <b>Получатель:</b> {receiver}\n"
+        f"💎 <b>Статус:</b> успешно получено\n\n"
+        "🛍️ Спасибо за покупку в <b>Iris Store</b>"
+    )
 
     await call.message.edit_caption(
         caption=(call.message.caption or "") + "\n\n✅ <b>ОДОБРЕНО</b>"
@@ -627,13 +609,11 @@ async def deny_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        f"❌ <b>Заказ #{order_id} отклонён</b>
-
-"
+        f"❌ <b>Заказ #{order_id} отклонён</b>\n\n"
         "💬 Если возникли вопросы — напишите в поддержку."
     )
 
-await call.message.edit_caption(
+    await call.message.edit_caption(
         caption=(call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>"
     )
 
