@@ -100,7 +100,7 @@ waiting_username = {}
 
 
 def make_order_id():
-    return f"IRIS{1000 + (uuid.uuid4().int % 9000)}"
+    return f"#IRIS{1000 + (uuid.uuid4().int % 9000)}"
 
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
