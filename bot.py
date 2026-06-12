@@ -148,7 +148,7 @@ async def faq(call: CallbackQuery):
     "💳 <b>Как купить?</b>\n"
     "— Выберите пакет, укажите username, оплатите и отправьте чек.\n\n"
     "⏳ <b>Сколько ждать?</b>\n"
-    "— Обычно 5–30 минут.\n\n"
+    "— Обычно 5–20 минут.\n\n"
     "🍬 <b>Куда придут ириски?</b>\n"
     "— На username, который вы указали.\n\n"
     "💸 <b>Можно ли сделать возврат?</b>\n"
@@ -280,8 +280,11 @@ async def get_receiver_username(message: Message):
 
     receiver = message.text.strip()
 
-    if len(receiver) < 5:
-        await message.answer("❌ Username слишком короткий. Пример: @Artemwesh")
+    if not re.match(r"^@[A-Za-z0-9_]{5,32}$", receiver):
+        await message.answer("❌ <b>Username указан неверно.</b>
+
+Пример правильного формата:
+<code>@username</code> Пример: @Artemwesh")
         return
 
     user_order["receiver"] = receiver
@@ -297,10 +300,10 @@ async def get_receiver_username(message: Message):
         "💳 <b>Оплата заказа</b>\n\n"
 
         "<blockquote>"
-        f"🧾 <b>Заказ:</b> #{user_order['order_id']}\n"
+        f"🧾 <b>Номер заказа:</b> #{user_order['order_id']}\n"
         f"🍬 <b>Товар:</b> {user_order['item']}\n"
         f"👤 <b>Получатель:</b> {receiver}\n"
-        f"💰 <b>К оплате:</b> {user_order['price']}"
+        f"💸 <b>Сумма:</b> {user_order['price']}"
         "</blockquote>\n\n"
 
         "🏦 <b>Реквизиты для перевода</b>\n\n"
@@ -325,7 +328,7 @@ async def get_receiver_username(message: Message):
         "🔒 <b>Безопасная сделка</b>\n\n"
         "Все заказы проверяются\n"
         "вручную администратором\n\n"
-        "⏳ <b>Проверка:</b> Обычно 5–30 минут 💛",
+        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛",
         reply_markup=keyboard
     )
 
@@ -437,7 +440,7 @@ async def text_router(message: Message):
             status_text = (
                 "👀 <b>Статус:</b>\n"
                 "Администратор уже проверяет ваш заказ\n\n"
-                "⏳ Обычно проверка занимает 5–30 минут 💜"
+                "⏳ Обычно проверка занимает 5–20 минут 💜"
             )
         elif status == "approved":
             status_text = (
@@ -459,7 +462,7 @@ async def text_router(message: Message):
             )
 
         await message.answer(
-            f"🧾 <b>Заказ:</b> <code>#{order_number}</code>\n\n{status_text}"
+            f"🧾 <b>Номер заказа:</b> <code>#{order_number}</code>\n\n{status_text}"
         )
         return
 
@@ -548,21 +551,21 @@ async def get_payment_photo(message: Message):
     )
 
     caption = (
-        "🚨 <b>НОВЫЙ ЗАКАЗ</b>\n\n"
-        f"🧾 Заказ: <code>#{user_order['order_id']}</code>\n\n"
+        "🧾 <b>Новый заказ</b>\n\n"
+        f"🆔 Номер: <code>#{user_order['order_id']}</code>\n\n"
         f"👤 Покупатель: <b>{user_order['buyer_name']}</b>\n"
         f"🔗 Username: {buyer_username}\n"
         f"🆔 ID: <code>{message.from_user.id}</code>\n\n"
         f"🍬 Товар: <b>{user_order['item']}</b>\n"
         f"🎯 Выдать на: <b>{user_order['receiver']}</b>\n"
-        f"💰 Сумма: <b>{user_order['price']}</b>\n\n"
+        f"💸 Сумма: <b>{user_order['price']}</b>\n\n"
         "📸 Чек оплаты:"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="👀 Заказ увиден",
+                text="👀 Заказ просмотрен",
                 callback_data=f"view_{message.from_user.id}_{user_order['order_id']}"
             ),
             InlineKeyboardButton(
@@ -617,7 +620,7 @@ async def view_order(call: CallbackQuery):
 
     user_order["status"] = "viewed"
 
-    # Убираем кнопку «Заказ увиден», оставляем только Одобрить/Отказаться
+    # Убираем кнопку «Заказ просмотрен», оставляем только Одобрить/Отказаться
     new_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
