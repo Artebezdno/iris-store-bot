@@ -299,7 +299,7 @@ async def get_receiver_username(message: Message):
 
     await message.answer(
         "💳 <b>Оплата заказа</b>\n\n"
-        f"🧾 <b>Номер заказа:</b> {user_order['order_id']}\n\n"
+        f"🧾 <b>Номер заказа:</b> #{user_order['order_id']}\n\n"
         f"🍬 <b>Товар:</b> {user_order['item']}\n"
         f"👤 <b>Получатель:</b> {receiver}\n"
         f"💸 <b>Сумма:</b> {user_order['price']}\n\n"
