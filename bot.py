@@ -298,38 +298,28 @@ async def get_receiver_username(message: Message):
     ])
 
     await message.answer(
-        "💳 <b>Оплата заказа</b>\n\n"
+        "💳 <b>Оплата заказа</b>
 
-        "<blockquote>"
-        f"🧾 <b>Номер заказа:</b> #{user_order['order_id']}\n"
-        f"🍬 <b>Товар:</b> {user_order['item']}\n"
-        f"👤 <b>Получатель:</b> {receiver}\n"
-        f"💸 <b>Сумма:</b> {user_order['price']}"
-        "</blockquote>\n\n"
+"
+        f"🧾 <b>Номер заказа:</b> {user_order['order_id']}
 
-        "🏦 <b>Банк:</b> PUMB\n\n"
+"
+        f"🍬 <b>Товар:</b> {user_order['item']}
+"
+        f"👤 <b>Получатель:</b> {receiver}
+"
+        f"💸 <b>Сумма:</b> {user_order['price']}
 
-        "<blockquote>"
-        f"• <b>Банк:</b> {BANK_NAME}\n"
-        f"• <b>Номер карты:</b> <code>{CARD_NUMBER}</code>\n"
-        "• <b>Получатель:</b> Не указан"
-        "</blockquote>\n\n"
+"
+        f"🏦 <b>Банк:</b> {BANK_NAME}
+"
+        f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>
 
-        "🤖 <b>Что нужно сделать</b>\n\n"
+"
+        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛
 
-        "<blockquote>"
-        "\n"
-        "\n"
-        ""
-        "</blockquote>\n\n"
-
-        "⚠️ <b>Важно</b>\n\n"
-        "• Проверьте <b>username</b> перед оплатой\n"
-        "\n\n"
-        "🔒 <b>Безопасная сделка</b>\n\n"
-        "Все заказы проверяются\n"
-        "вручную администратором\n\n"
-        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛",
+"
+        "После оплаты нажмите кнопку ниже.",
         reply_markup=keyboard
     )
 
@@ -425,48 +415,6 @@ async def text_router(message: Message):
         return
 
     text = (message.text or "").strip().upper()
-
-    # Проверка заказа по номеру: #IRIS8791
-    if re.match(r"^#?IRIS\d+$", text):
-        order_number = text.replace("#", "").strip().upper()
-        order = orders_by_id.get(order_number)
-
-        if not order:
-            await message.answer("❌ Заказ не найден")
-            return
-
-        status = order.get("status", "pending")
-
-        if status == "viewed":
-            status_text = (
-                "👀 <b>Статус:</b>\n"
-                "Администратор уже проверяет ваш заказ\n\n"
-                "⏳ Обычно проверка занимает 5–20 минут 💜"
-            )
-        elif status == "approved":
-            status_text = (
-                "🟢 <b>Статус:</b>\n"
-                "Успешно выполнен\n\n"
-                "🍬 Ириски успешно выданы."
-            )
-        elif status == "denied":
-            status_text = (
-                "🔴 <b>Статус:</b>\n"
-                "Отклонён\n\n"
-                "💬 Если возникли вопросы — напишите в поддержку."
-            )
-        else:
-            status_text = (
-                "🟡 <b>Статус:</b>\n"
-                "Ещё не просмотрен администратором\n\n"
-                "⏳ Ожидайте проверки."
-            )
-
-        await message.answer(
-            f"🧾 <b>Номер заказа:</b> <code>#{order_number}</code>\n\n{status_text}"
-        )
-        return
-
     # Если ждём username, но пользователь написал не @username
     if waiting_username.get(message.from_user.id):
         await message.answer(
@@ -505,8 +453,7 @@ async def paid(call: CallbackQuery):
     user_order["status"] = "waiting_photo"
 
     await call.message.answer(
-        "📸 Теперь отправьте сюда скриншот или фото чека оплаты.\n\n"
-        "После этого админ проверит оплату вручную."
+        "📸 <b>Отправьте чек оплаты</b>"
     )
 
 @dp.message(F.photo)
@@ -546,11 +493,14 @@ async def get_payment_photo(message: Message):
     buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
 
     await message.answer(
-        "✅ Скрин оплаты получен.\n"
-        "⏳ Заказ отправлен на проверку.\n"
-        "Ожидайте администратора."
-    )
+        f"🟡 <b>Заказ {user_order['order_id']}</b>
 
+"
+        "Чек отправлен на проверку.
+
+"
+        "⏱ Обычно проверка занимает 5–20 минут."
+    )
     caption = (
         "🧾 <b>Новый заказ</b>\n\n"
         f"🆔 Номер: <code>#{user_order['order_id']}</code>\n\n"
@@ -558,18 +508,13 @@ async def get_payment_photo(message: Message):
         f"🔗 Username: {buyer_username}\n"
         f"🆔 ID: <code>{message.from_user.id}</code>\n\n"
         f"🍬 Товар: <b>{user_order['item']}</b>\n"
-        f"🎯 Выдать на: <b>{user_order['receiver']}</b>\n"
+        f"🎯 Получатель: <b>{user_order['receiver']}</b>\n"
         f"💸 Сумма: <b>{user_order['price']}</b>\n\n"
         "📸 Чек оплаты:"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="👀 Заказ просмотрен",
-                callback_data=f"view_{message.from_user.id}_{user_order['order_id']}"
-            ),
-            InlineKeyboardButton(
+        [InlineKeyboardButton(
                 text="✅ Одобрить",
                 callback_data=f"approve_{message.from_user.id}_{user_order['order_id']}"
             ),
@@ -597,54 +542,6 @@ def get_value_from_caption(caption: str, label: str):
     return "не указано"
 
 
-
-@dp.callback_query(F.data.startswith("view_"))
-async def view_order(call: CallbackQuery):
-    data = call.data.replace("view_", "", 1)
-    parts = data.split("_", 1)
-
-    if len(parts) != 2:
-        await call.answer("Ошибка", show_alert=True)
-        return
-
-    user_id = int(parts[0])
-    order_id = parts[1]
-
-    user_order = orders_by_id.get(order_id)
-    if not user_order:
-        await call.answer("Заказ не найден", show_alert=True)
-        return
-
-    if user_order.get("status") == "viewed":
-        await call.answer("Заказ уже отмечен как увиденный", show_alert=True)
-        return
-
-    user_order["status"] = "viewed"
-
-    # Убираем кнопку «Заказ просмотрен», оставляем только Одобрить/Отказаться
-    new_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ Одобрить",
-                callback_data=f"approve_{user_id}_{order_id}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Отказаться",
-                callback_data=f"deny_{user_id}_{order_id}"
-            )
-        ]
-    ])
-
-    caption = call.message.caption or ""
-    if "👀 <b>ЗАКАЗ УВИДЕН</b>" not in caption:
-        caption += "\n\n👀 <b>ЗАКАЗ УВИДЕН</b>"
-
-    await call.message.edit_caption(
-        caption=caption,
-        reply_markup=new_keyboard
-    )
-
-    await call.answer("Заказ отмечен как увиденный ✅")
 
 
 @dp.callback_query(F.data.startswith("approve_"))
@@ -682,13 +579,13 @@ async def approve_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        "🎉 <b>Ириски успешно выданы!</b>\n\n"
-        "🍬 Ваш заказ выполнен.\n"
-        "Спасибо за покупку в <b>Iris Store</b> 💛\n\n"
-        "⭐ Не забудьте оставить отзыв"
+        f"✅ <b>Заказ #{order_id} выполнен!</b>
+
+"
+        "🍬 Ириски успешно выданы 💜"
     )
 
-    await bot.send_message(
+await bot.send_message(
     CHANNEL_ID,
     f"✅ <b>Покупатель получил ириски</b>\n\n"
     f"🧾 <b>Номер заказа:</b> #{order_id}\n"
@@ -730,12 +627,13 @@ async def deny_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        "❌ <b>Оплата отклонена</b>\n\n"
-        "Скрин не прошёл проверку.\n"
-        "Вы можете отправить новый чек или выбрать новый пакет."
+        f"❌ <b>Заказ #{order_id} отклонён</b>
+
+"
+        "💬 Если возникли вопросы — напишите в поддержку."
     )
 
-    await call.message.edit_caption(
+await call.message.edit_caption(
         caption=(call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>"
     )
 
