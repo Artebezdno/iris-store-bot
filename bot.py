@@ -100,7 +100,7 @@ waiting_username = {}
 
 
 def make_order_id():
-    return f"#IRIS{1000 + (uuid.uuid4().int % 9000)}"
+    return f"IRIS{1000 + (uuid.uuid4().int % 9000)}"
 
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -562,14 +562,14 @@ async def approve_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        f"✅ <b>Заказ #{order_id} выполнен!</b>\n\n"
+        f"✅ <b>Заказ {order_id} выполнен!</b>\n\n"
         "🍬 Ириски успешно выданы 💜"
     )
 
     await bot.send_message(
         CHANNEL_ID,
         f"✅ <b>Покупатель получил ириски</b>\n\n"
-        f"🧾 <b>Номер заказа:</b> #{order_id}\n"
+        f"🧾 <b>Номер заказа:</b> {order_id}\n"
         f"🍬 <b>Количество:</b> {item}\n"
         f"👤 <b>Получатель:</b> {receiver}\n"
         f"💎 <b>Статус:</b> успешно получено\n\n"
@@ -609,7 +609,7 @@ async def deny_payment(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        f"❌ <b>Заказ #{order_id} отклонён</b>\n\n"
+        f"❌ <b>Заказ {order_id} отклонён</b>\n\n"
         "💬 Если возникли вопросы — напишите в поддержку."
     )
 
