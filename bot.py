@@ -281,10 +281,11 @@ async def get_receiver_username(message: Message):
     receiver = message.text.strip()
 
     if not re.match(r"^@[A-Za-z0-9_]{5,32}$", receiver):
-        await message.answer("❌ <b>Username указан неверно.</b>
-
-Пример правильного формата:
-<code>@username</code> Пример: @Artemwesh")
+        await message.answer(
+            "❌ <b>Username указан неверно.</b>\n\n"
+            "Пример правильного формата:\n"
+            "<code>@username</code>"
+        )
         return
 
     user_order["receiver"] = receiver
