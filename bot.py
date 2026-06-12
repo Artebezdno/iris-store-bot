@@ -440,7 +440,7 @@ async def paid(call: CallbackQuery):
     user_order["status"] = "waiting_photo"
 
     await call.message.answer(
-        "📸 <b>Отправьте чек оплаты</b>"
+        "📸 <b>Пришлите фото чека оплаты</b>\n\nПосле проверки администратором\nзаказ будет обработан 💜"
     )
 
 @dp.message(F.photo)
