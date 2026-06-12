@@ -307,7 +307,7 @@ async def get_receiver_username(message: Message):
         f"💸 <b>Сумма:</b> {user_order['price']}"
         "</blockquote>\n\n"
 
-        "🏦 <b>Реквизиты для перевода</b>\n\n"
+        "🏦 <b>Банк:</b> PUMB\n\n"
 
         "<blockquote>"
         f"• <b>Банк:</b> {BANK_NAME}\n"
@@ -318,14 +318,14 @@ async def get_receiver_username(message: Message):
         "🤖 <b>Что нужно сделать</b>\n\n"
 
         "<blockquote>"
-        "1. Переведите точную сумму на карту выше\n"
-        "2. Нажмите кнопку «✅ Я оплатил»\n"
-        "3. Отправьте скриншот или фото чека"
+        "\n"
+        "\n"
+        ""
         "</blockquote>\n\n"
 
         "⚠️ <b>Важно</b>\n\n"
         "• Проверьте <b>username</b> перед оплатой\n"
-        "• После выдачи изменить получателя нельзя\n\n"
+        "\n\n"
         "🔒 <b>Безопасная сделка</b>\n\n"
         "Все заказы проверяются\n"
         "вручную администратором\n\n"
