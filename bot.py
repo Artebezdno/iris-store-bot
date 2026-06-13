@@ -28,6 +28,7 @@ app = Flask(__name__)
 
 
 
+dp = Dispatcher()
 @dp.callback_query(F.data == "paid")
 async def paid(call: CallbackQuery):
     user_order = orders.get(call.from_user.id)
