@@ -242,6 +242,11 @@ async def back_start(call: CallbackQuery):
         reply_markup=main_menu()
     )
 
+
+def keep_alive():
+    Thread(target=run_site, daemon=True).start()
+
+
 async def main():
     keep_alive()
     start_auto_ping()
