@@ -15,6 +15,12 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 TOKEN = os.getenv("BOT_TOKEN")
+
+bot = Bot(
+    token=TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
+
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
 
