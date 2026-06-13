@@ -571,7 +571,6 @@ async def approve_payment(call: CallbackQuery):
         f"✅ <b>Покупатель получил ириски</b>\n\n"
         f"🧾 <b>Номер заказа:</b> #{order_id}\n"
         f"🍬 <b>Количество:</b> {item}\n"
-        f"👤 <b>Получатель:</b> {receiver}\n"
         f"💎 <b>Статус:</b> успешно получено\n\n"
         "🛍️ Спасибо за покупку в <b>Iris Store</b>"
     )
