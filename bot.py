@@ -244,7 +244,6 @@ async def back_start(call: CallbackQuery):
 
 
 async def main():
-    start_auto_ping()
     print("Iris Store bot started ✅")
     await dp.start_polling(bot)
 
