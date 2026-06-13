@@ -148,7 +148,7 @@ async def faq(call: CallbackQuery):
     "💳 <b>Как купить?</b>\n"
     "— Выберите пакет, укажите username, оплатите и отправьте чек.\n\n"
     "⏳ <b>Сколько ждать?</b>\n"
-    "— Обычно 5–20 минут.\n\n"
+    "— Заказ будет обработан в течение 24 часов 💛\n\n"
     "🍬 <b>Куда придут ириски?</b>\n"
     "— На username, который вы указали.\n\n"
     "💸 <b>Можно ли сделать возврат?</b>\n"
@@ -159,7 +159,6 @@ async def faq(call: CallbackQuery):
     "— Кнопка «Отзывы» в главном меню.",
     reply_markup=keyboard
 )
-
 
 
 @dp.callback_query(F.data == "why_store")
@@ -298,17 +297,17 @@ async def get_receiver_username(message: Message):
     ])
 
     await message.answer(
-        "💳 <b>Оплата заказа</b>\n\n"
-        f"🧾 <b>Номер заказа:</b> #{user_order['order_id']}\n\n"
-        f"🍬 <b>Товар:</b> {user_order['item']}\n"
-        f"👤 <b>Получатель:</b> {receiver}\n"
-        f"💸 <b>Сумма:</b> {user_order['price']}\n\n"
-        f"🏦 <b>Банк:</b> {BANK_NAME}\n"
-        f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>\n\n"
-        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛\n\n"
-        "После оплаты нажмите кнопку ниже.",
-        reply_markup=keyboard
-    )
+    "💳 <b>Оплата заказа</b>\n\n"
+    f"🧾 <b>Номер заказа:</b> #{user_order['order_id']}\n\n"
+    f"🍬 <b>Товар:</b> {user_order['item']}\n"
+    f"👤 <b>Получатель:</b> {receiver}\n"
+    f"💸 <b>Сумма:</b> {user_order['price']}\n\n"
+    f"🏦 <b>Банк:</b> {BANK_NAME}\n"
+    f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>\n\n"
+    "⏳ <b>Заказ будет обработан в течение 24 часов 💛</b>\n\n"
+    "После оплаты нажмите кнопку ниже.",
+    reply_markup=keyboard
+)
 
 
 @dp.message(Command("sendall"))
@@ -480,10 +479,10 @@ async def get_payment_photo(message: Message):
     buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
 
     await message.answer(
-        f"🟡 <b>Заказ #{user_order['order_id']}</b>\n\n"
-        "Чек отправлен на проверку.\n\n"
-        "⏱ Обычно проверка занимает 5–20 минут."
-    )
+    f"🟡 <b>Заказ #{user_order['order_id']}</b>\n\n"
+    "Чек отправлен на проверку.\n\n"
+    "⏳ Заказ будет обработан в течение 24 часов 💛"
+)
     caption = (
         "🧾 <b>Новый заказ</b>\n\n"
         f"🆔 Номер: <code>#{user_order['order_id']}</code>\n\n"
