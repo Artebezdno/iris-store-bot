@@ -243,12 +243,7 @@ async def back_start(call: CallbackQuery):
     )
 
 
-def keep_alive():
-    Thread(target=run_site, daemon=True).start()
-
-
 async def main():
-    keep_alive()
     start_auto_ping()
     print("Iris Store bot started ✅")
     await dp.start_polling(bot)
