@@ -148,7 +148,7 @@ async def faq(call: CallbackQuery):
     "💳 <b>Как купить?</b>\n"
     "— Выберите пакет, укажите username, оплатите и отправьте чек.\n\n"
     "⏳ <b>Сколько ждать?</b>\n"
-    "— Обычно 5–20 минут.\n\n"
+    "— Обычно в течение 24 часов.\n\n"
     "🍬 <b>Куда придут ириски?</b>\n"
     "— На username, который вы указали.\n\n"
     "💸 <b>Можно ли сделать возврат?</b>\n"
@@ -305,7 +305,7 @@ async def get_receiver_username(message: Message):
         f"💸 <b>Сумма:</b> {user_order['price']}\n\n"
         f"🏦 <b>Банк:</b> {BANK_NAME}\n"
         f"💳 <b>Карта:</b> <code>{CARD_NUMBER}</code>\n\n"
-        "⏳ <b>Проверка:</b> Обычно 5–20 минут 💛\n\n"
+        "⏳ <b>Проверка:</b> Обычно в течение 24 часов 💛\n\n"
         "После оплаты нажмите кнопку ниже.",
         reply_markup=keyboard
     )
@@ -482,7 +482,7 @@ async def get_payment_photo(message: Message):
     await message.answer(
         f"🟡 <b>Заказ #{user_order['order_id']}</b>\n\n"
         "Чек отправлен на проверку.\n\n"
-        "⏱ Обычно проверка занимает 5–20 минут."
+        "⏳ Заказ будет обработан в течение 24 часов 💛"
     )
     caption = (
         "🧾 <b>Новый заказ</b>\n\n"
