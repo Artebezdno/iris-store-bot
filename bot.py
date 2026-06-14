@@ -7,7 +7,11 @@ from threading import Thread
 
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton
+)
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -19,6 +23,7 @@ if not TOKEN:
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
 REVIEWS_LINK = "https://t.me/IrisStoreMarket"
+SUPPORT_USERNAME = "@Artemwesh"
 SITE_URL = "https://iris-store-bot.onrender.com/"
 CARD_NUMBER = "5355 2800 2289 5252"
 BANK_NAME = "PUMB"
@@ -31,10 +36,14 @@ orders = {}
 orders_by_id = {}
 
 PACKAGES = {
-    "pack_50": ("50 ирисок", "45 грн"),
-    "pack_100": ("100 ирисок", "85 грн"),
-    "pack_500": ("500 ирисок", "400 грн"),
-    "pack_1000": ("1000 ирисок", "800 грн"),
+    "🍬 10 ирисок — 10 грн": ("10 ирисок", "10 грн"),
+    "🍬 25 ирисок — 25 грн": ("25 ирисок", "25 грн"),
+    "🍬 50 ирисок — 45 грн": ("50 ирисок", "45 грн"),
+    "🍬 100 ирисок — 85 грн": ("100 ирисок", "85 грн"),
+    "🍬 250 ирисок — 210 грн": ("250 ирисок", "210 грн"),
+    "🍬 500 ирисок — 400 грн": ("500 ирисок", "400 грн"),
+    "🍬 1000 ирисок — 800 грн": ("1000 ирисок", "800 грн"),
+    "🍬 2000 ирисок — 1550 грн": ("2000 ирисок", "1550 грн"),
 }
 
 @app.route("/")
@@ -54,28 +63,29 @@ def auto_ping():
             print("Ping error:", e)
         time.sleep(240)
 
-def main_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍬 Купить ириски", callback_data="buy")],
-        [InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK)],
-        [InlineKeyboardButton(text="❓ FAQ", callback_data="faq")],
-        [InlineKeyboardButton(text="🛠 Поддержка", callback_data="support")],
-    ])
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🍬 Купить ириски")],
+            [KeyboardButton(text="⭐ Отзывы"), KeyboardButton(text="❓ FAQ")],
+            [KeyboardButton(text="🛠 Поддержка")],
+        ],
+        resize_keyboard=True
+    )
 
-def packages_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍬 50 ирисок — 45 грн", callback_data="pack_50")],
-        [InlineKeyboardButton(text="🍬 100 ирисок — 85 грн", callback_data="pack_100")],
-        [InlineKeyboardButton(text="🍬 500 ирисок — 400 грн", callback_data="pack_500")],
-        [InlineKeyboardButton(text="🍬 1000 ирисок — 800 грн", callback_data="pack_1000")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")],
-    ])
+def packages_keyboard():
+    rows = [[KeyboardButton(text=text)] for text in PACKAGES.keys()]
+    rows.append([KeyboardButton(text="⬅️ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-def paid_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")],
-    ])
+def pay_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Я оплатил")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ],
+        resize_keyboard=True
+    )
 
 def get_value_from_caption(caption: str, label: str):
     for line in (caption or "").splitlines():
@@ -91,47 +101,64 @@ async def start(message: Message):
     await message.answer(
         "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
         "Здесь вы можете быстро купить ириски 🍬",
-        reply_markup=main_menu()
+        reply_markup=main_keyboard()
     )
 
-@dp.callback_query(F.data == "back_start")
-async def back_start(call: CallbackQuery):
-    await call.message.edit_text(
-        "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
-        "Здесь вы можете быстро купить ириски 🍬",
-        reply_markup=main_menu()
-    )
-    await call.answer()
+@dp.message(F.text == "⬅️ Назад")
+async def back(message: Message):
+    await message.answer("🏠 Главное меню", reply_markup=main_keyboard())
 
-@dp.callback_query(F.data == "buy")
-async def buy(call: CallbackQuery):
-    await call.message.edit_text("🍬 <b>Выберите пакет ирисок:</b>", reply_markup=packages_menu())
-    await call.answer()
+@dp.message(F.text == "🍬 Купить ириски")
+async def buy(message: Message):
+    await message.answer("🍬 <b>Выберите пакет ирисок:</b>", reply_markup=packages_keyboard())
 
-@dp.callback_query(F.data.in_(PACKAGES.keys()))
-async def choose_package(call: CallbackQuery):
-    item, price = PACKAGES[call.data]
+@dp.message(F.text.in_(PACKAGES.keys()))
+async def choose_package(message: Message):
+    item, price = PACKAGES[message.text]
     order_id = str(random.randint(1000, 9999))
     order = {
         "order_id": order_id,
-        "buyer_id": call.from_user.id,
-        "buyer_name": call.from_user.full_name,
-        "buyer_username": call.from_user.username,
+        "buyer_id": message.from_user.id,
+        "buyer_name": message.from_user.full_name,
+        "buyer_username": message.from_user.username,
         "item": item,
         "price": price,
         "receiver": None,
         "status": "waiting_username",
     }
-    orders[call.from_user.id] = order
+    orders[message.from_user.id] = order
     orders_by_id[order_id] = order
-    await call.message.edit_text(
+    await message.answer(
         f"✅ <b>Заказ #{order_id} создан!</b>\n\n"
         f"🍬 Товар: <b>{item}</b>\n"
         f"💸 Цена: <b>{price}</b>\n\n"
         "📩 Отправьте username получателя ирисок.\n"
         "Пример: <code>@username</code>"
     )
-    await call.answer()
+
+@dp.message(F.text == "⭐ Отзывы")
+async def reviews(message: Message):
+    await message.answer(f"⭐ Отзывы покупателей: {REVIEWS_LINK}", reply_markup=main_keyboard())
+
+@dp.message(F.text == "❓ FAQ")
+async def faq(message: Message):
+    await message.answer(
+        "❓ <b>FAQ</b>\n\n"
+        "🛒 <b>Как купить?</b>\nВыберите пакет, укажите username, оплатите и отправьте чек.\n\n"
+        "⏳ <b>Сколько ждать?</b>\nОбычно 5–30 минут.\n\n"
+        "🎯 <b>Куда придут ириски?</b>\nНа указанный username.\n\n"
+        "💸 <b>Можно ли сделать возврат?</b>\nДа, если заказ ещё не выполнен. После выдачи возврат невозможен.",
+        reply_markup=main_keyboard()
+    )
+
+@dp.message(F.text == "🛠 Поддержка")
+async def support(message: Message):
+    await message.answer(
+        "🛠 <b>Поддержка</b>\n\n"
+        f"Пишите сюда: {SUPPORT_USERNAME}\n"
+        "Укажите номер заказа и проблему.",
+        reply_markup=main_keyboard()
+    )
 
 @dp.message(F.text.startswith("@"))
 async def get_receiver(message: Message):
@@ -151,28 +178,27 @@ async def get_receiver(message: Message):
         f"🏦 Банк: <b>{BANK_NAME}</b>\n"
         f"💳 Карта: <code>{CARD_NUMBER}</code>\n\n"
         "После оплаты нажмите кнопку ниже.",
-        reply_markup=paid_keyboard()
+        reply_markup=pay_keyboard()
     )
 
-@dp.callback_query(F.data == "paid")
-async def paid(call: CallbackQuery):
-    user_order = orders.get(call.from_user.id)
+@dp.message(F.text == "✅ Я оплатил")
+async def paid(message: Message):
+    user_order = orders.get(message.from_user.id)
     if not user_order:
-        await call.message.answer("❌ Сначала выберите пакет ирисок.")
+        await message.answer("❌ Сначала выберите пакет ирисок.")
         return
     if not user_order.get("receiver"):
-        await call.message.answer("❌ Сначала укажите username получателя.")
+        await message.answer("❌ Сначала укажите username получателя.")
         return
     if user_order.get("status") == "pending":
-        await call.message.answer("⏳ Ваш чек уже находится на проверке.")
+        await message.answer("⏳ Ваш чек уже находится на проверке.")
         return
     if user_order.get("status") == "approved":
-        await call.message.answer("✅ Этот заказ уже одобрен. Чтобы купить ещё, выберите новый пакет.")
+        await message.answer("✅ Этот заказ уже одобрен. Чтобы купить ещё, выберите новый пакет.")
         return
 
     user_order["status"] = "waiting_photo"
-    await call.message.answer("📸 <b>Отправьте чек оплаты фото/скриншотом</b>")
-    await call.answer()
+    await message.answer("📸 <b>Отправьте чек оплаты фото/скриншотом</b>")
 
 @dp.message(F.photo)
 async def get_payment_photo(message: Message):
@@ -193,7 +219,8 @@ async def get_payment_photo(message: Message):
     await message.answer(
         f"🟡 <b>Заказ #{user_order['order_id']}</b>\n\n"
         "Чек отправлен на проверку.\n\n"
-        "⏳ Заказ будет обработан в течение 24 часов 💛"
+        "⏳ Заказ будет обработан в течение 24 часов 💛",
+        reply_markup=main_keyboard()
     )
 
     caption = (
@@ -207,7 +234,7 @@ async def get_payment_photo(message: Message):
         f"💸 Сумма: <b>{user_order['price']}</b>\n\n"
         "📸 Чек оплаты:"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[ 
         InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{message.from_user.id}_{user_order['order_id']}"),
         InlineKeyboardButton(text="❌ Отказать", callback_data=f"deny_{message.from_user.id}_{user_order['order_id']}")
     ]])
@@ -250,31 +277,9 @@ async def deny_payment(call: CallbackQuery):
     user_order = orders_by_id.get(order_id)
     if user_order:
         user_order["status"] = "denied"
-    await bot.send_message(user_id, f"❌ <b>Заказ #{order_id} отклонён</b>\n\n💬 Если возникли вопросы — напишите в поддержку.")
+    await bot.send_message(user_id, f"❌ <b>Заказ #{order_id} отклонён</b>\n\n💬 Поддержка: {SUPPORT_USERNAME}")
     await call.message.edit_caption(caption=(call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>")
     await call.answer("Отклонено")
-
-@dp.callback_query(F.data == "faq")
-async def faq(call: CallbackQuery):
-    await call.message.edit_text(
-        "❓ <b>FAQ</b>\n\n"
-        "🛒 <b>Как купить?</b>\nВыберите пакет, укажите username, оплатите и отправьте чек.\n\n"
-        "⏳ <b>Сколько ждать?</b>\nОбычно 5–30 минут.\n\n"
-        "🎯 <b>Куда придут ириски?</b>\nНа указанный username.\n\n"
-        "💸 <b>Можно ли сделать возврат?</b>\nДа, если заказ ещё не выполнен. После выдачи возврат невозможен.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]])
-    )
-    await call.answer()
-
-@dp.callback_query(F.data == "support")
-async def support(call: CallbackQuery):
-    await call.message.edit_text(
-        "🛠 <b>Поддержка</b>\n\n"
-        "Если есть вопрос по заказу — напишите админу.\n"
-        "Укажите номер заказа и проблему.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_start")]])
-    )
-    await call.answer()
 
 async def main():
     print("Iris Store bot started ✅")
