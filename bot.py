@@ -33,6 +33,25 @@ BANK_NAME = "PUMB"
 app = Flask(__name__)
 
 
+@app.route("/")
+def home():
+    return "Iris Store bot is running ✅"
+
+
+def keep_alive():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+
+def auto_ping():
+    while True:
+        try:
+            response = requests.get(SITE_URL, timeout=10)
+            print(f"Ping OK: {response.status_code}")
+        except Exception as e:
+            print("Ping error:", e)
+        time.sleep(240)  # каждые 4 минуты
+
 
 dp = Dispatcher()
 @dp.callback_query(F.data == "paid")
@@ -254,4 +273,6 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    Thread(target=keep_alive, daemon=True).start()
+    Thread(target=auto_ping, daemon=True).start()
     asyncio.run(main())
