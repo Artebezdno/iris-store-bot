@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 import random
 import time
@@ -31,54 +30,6 @@ app = Flask(__name__)
 
 orders = {}
 orders_by_id = {}
-USERS_FILE = "users.json"
-
-def load_users():
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-def save_users(users):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-def get_user_profile(user_id, username=None):
-    users = load_users()
-    uid = str(user_id)
-    if uid not in users:
-        users[uid] = {"username": username or "", "orders": 0, "candies": 0}
-    else:
-        if username:
-            users[uid]["username"] = username
-        users[uid].setdefault("orders", 0)
-        users[uid].setdefault("candies", 0)
-    save_users(users)
-    return users[uid]
-
-def add_user_stats(user_id, username, item):
-    users = load_users()
-    uid = str(user_id)
-    candies_count = int("".join(ch for ch in item if ch.isdigit()) or 0)
-    if uid not in users:
-        users[uid] = {"username": username or "", "orders": 0, "candies": 0}
-    if username:
-        users[uid]["username"] = username
-    users[uid]["orders"] = int(users[uid].get("orders", 0)) + 1
-    users[uid]["candies"] = int(users[uid].get("candies", 0)) + candies_count
-    save_users(users)
-    return users[uid]
-
-def get_total_stats():
-    users = load_users()
-    total_orders = sum(int(u.get("orders", 0)) for u in users.values())
-    total_candies = sum(int(u.get("candies", 0)) for u in users.values())
-    return total_orders, total_candies
-
-def cleanup_order(user_id, order_id):
-    orders.pop(user_id, None)
-    orders_by_id.pop(order_id, None)
 
 PACKAGES = {
     "🍬 50 ирисок — 45 грн": ("50 ирисок", "45 грн"),
@@ -111,7 +62,6 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🍬 Купить ириски")],
-            [KeyboardButton(text="👤 Профиль")],
             [KeyboardButton(text="⭐ Отзывы"), KeyboardButton(text="❓ FAQ")],
             [KeyboardButton(text="🛠 Поддержка")],
         ],
@@ -178,38 +128,6 @@ async def choose_package(message: Message):
         "Пример:\n"
         "<code>@username</code>\n\n"
         "⚠️ На этот username будут выданы ириски."
-    )
-
-
-@dp.message(F.text == "👤 Профиль")
-async def profile(message: Message):
-    user_id = message.from_user.id
-    username = message.from_user.username or "нет username"
-
-    if user_id == ADMIN_ID:
-        total_orders, total_candies = get_total_stats()
-        await message.answer(
-            "👤 <b>Ваш профиль</b>\n\n"
-            f"🆔 ID: <code>{user_id}</code>\n"
-            f"📛 Username: @{username}\n"
-            f"📦 Всего заказов: <b>{total_orders}</b>\n"
-            f"🍬 Всего куплено ирисок: <b>{total_candies}</b>",
-            reply_markup=main_keyboard()
-        )
-        return
-
-    data = get_user_profile(user_id, message.from_user.username)
-    show_username = data.get("username") or username
-    if show_username != "нет username" and not show_username.startswith("@"):
-        show_username = "@" + show_username
-
-    await message.answer(
-        "👤 <b>Ваш профиль</b>\n\n"
-        f"🆔 ID: <code>{user_id}</code>\n"
-        f"📛 Username: {show_username}\n"
-        f"📦 Заказов: <b>{data.get('orders', 0)}</b>\n"
-        f"🍬 Куплено ирисок: <b>{data.get('candies', 0)}</b>",
-        reply_markup=main_keyboard()
     )
 
 @dp.message(F.text == "⭐ Отзывы")
@@ -333,17 +251,9 @@ async def approve_payment(call: CallbackQuery):
     user_id_text, order_id = data.split("_", 1)
     user_id = int(user_id_text)
     user_order = orders_by_id.get(order_id)
-    if not user_order or user_order.get("status") == "approved":
-        await call.answer("Заказ уже обработан или не найден", show_alert=True)
-        return
-
-    item = user_order["item"]
-    add_user_stats(
-        user_order["buyer_id"],
-        user_order.get("buyer_username"),
-        item
-    )
-    user_order["status"] = "approved"
+    item = user_order["item"] if user_order else "ириски"
+    if user_order:
+        user_order["status"] = "approved"
 
     await bot.send_message(
         user_id,
