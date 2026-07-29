@@ -1,3 +1,2 @@
 aiogram
-flask
-requests
+aiohttp
