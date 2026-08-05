@@ -1,148 +1,389 @@
+import os
+import json
 import asyncio
-import sqlite3
+import random
 import time
-import aiohttp
-from aiogram import Bot, Dispatcher
+import requests
+from threading import Thread
+
+from flask import Flask
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
-from aiogram.types import Message
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
-# ⚙️ НАСТРОЙКИ
-TOKEN = "СЮДА_ВСТАВЬ_ТОКЕН_БОТА"
-ADMIN_ID = 7837011810
-PING_URL = "https://iris-store-bot.onrender.com/"
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN не найден в Environment на Render")
 
-bot = Bot(
-    token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
+REVIEWS_LINK = "https://t.me/IrisStoreMarket"
+SUPPORT_USERNAME = "@Artemwesh"
+SITE_URL = "https://iris-store-bot.onrender.com/"
+CARD_NUMBER = "5355 2800 2289 5252"
+BANK_NAME = "PUMB"
+
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+app = Flask(__name__)
 
-# База данных
-db = sqlite3.connect("ladushki.db")
-cursor = db.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    balance INTEGER DEFAULT 0,
-    last_daily INTEGER DEFAULT 0
-)
-""")
-db.commit()
+orders = {}
+orders_by_id = {}
+USERS_FILE = "users.json"
 
+def load_users():
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-# Автопинг каждые 5 минут (300 секунд)
-async def auto_ping_task():
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.get(PING_URL, timeout=10) as resp:
-                    print(f"Ping OK: {resp.status}")
-            except Exception as e:
-                print("Ping error:", e)
-            await asyncio.sleep(300)
+def save_users(users):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
 
+def get_user_profile(user_id, username=None):
+    users = load_users()
+    uid = str(user_id)
+    if uid not in users:
+        users[uid] = {"username": username or "", "orders": 0, "candies": 0}
+    else:
+        if username:
+            users[uid]["username"] = username
+        users[uid].setdefault("orders", 0)
+        users[uid].setdefault("candies", 0)
+    save_users(users)
+    return users[uid]
 
-def get_user(user_id, username):
-    cursor.execute(
-        "INSERT OR IGNORE INTO users(user_id, username) VALUES(?,?)",
-        (user_id, username)
+def add_user_stats(user_id, username, item):
+    users = load_users()
+    uid = str(user_id)
+    candies_count = int("".join(ch for ch in item if ch.isdigit()) or 0)
+    if uid not in users:
+        users[uid] = {"username": username or "", "orders": 0, "candies": 0}
+    if username:
+        users[uid]["username"] = username
+    users[uid]["orders"] = int(users[uid].get("orders", 0)) + 1
+    users[uid]["candies"] = int(users[uid].get("candies", 0)) + candies_count
+    save_users(users)
+    return users[uid]
+
+def get_total_stats():
+    users = load_users()
+    total_orders = sum(int(u.get("orders", 0)) for u in users.values())
+    total_candies = sum(int(u.get("candies", 0)) for u in users.values())
+    return total_orders, total_candies
+
+def cleanup_order(user_id, order_id):
+    orders.pop(user_id, None)
+    orders_by_id.pop(order_id, None)
+
+PACKAGES = {
+    "🍬 50 ирисок — 45 грн": ("50 ирисок", "45 грн"),
+    "🍬 100 ирисок — 89 грн": ("100 ирисок", "89 грн"),
+    "🍬 500 ирисок — 425 грн": ("500 ирисок", "425 грн"),
+    "🍬 1000 ирисок — 845 грн": ("1000 ирисок", "845 грн"),
+    "🍬 2000 ирисок — 1660 грн": ("2000 ирисок", "1660 грн"),
+    "🍬 5000 ирисок — 4100 грн": ("5000 ирисок", "4100 грн"),
+    "🍬 10000 ирисок — 8100 грн": ("10000 ирисок", "8100 грн"),
+}
+
+@app.route("/")
+def home():
+    return "Iris Store bot is running ✅"
+
+def keep_alive():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+def auto_ping():
+    while True:
+        try:
+            response = requests.get(SITE_URL, timeout=10)
+            print(f"Ping OK: {response.status_code}")
+        except Exception as e:
+            print("Ping error:", e)
+        time.sleep(240)
+
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🍬 Купить ириски")],
+            [KeyboardButton(text="👤 Профиль")],
+            [KeyboardButton(text="⭐ Отзывы"), KeyboardButton(text="❓ FAQ")],
+            [KeyboardButton(text="🛠 Поддержка")],
+        ],
+        resize_keyboard=True
     )
-    db.commit()
 
+def packages_keyboard():
+    rows = [[KeyboardButton(text=text)] for text in PACKAGES.keys()]
+    rows.append([KeyboardButton(text="⬅️ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+def pay_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Я оплатил")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ],
+        resize_keyboard=True
+    )
+
+def order_code(order_id):
+    return f"#IRIS{order_id}"
 
 @dp.message(Command("start"))
 async def start(message: Message):
-    get_user(message.from_user.id, message.from_user.full_name)
-    await message.answer("👏 Добро пожаловать в систему Ладушек!")
+    await message.answer(
+        "👋 Добро пожаловать в <b>Iris Store</b>!\n\n"
+        "Здесь вы можете быстро и удобно купить ириски 🍬",
+        reply_markup=main_keyboard()
+    )
+
+@dp.message(F.text == "⬅️ Назад")
+async def back(message: Message):
+    await message.answer("🏠 Главное меню", reply_markup=main_keyboard())
+
+@dp.message(F.text == "🍬 Купить ириски")
+async def buy(message: Message):
+    await message.answer(
+        "🍬 <b>Выберите пакет ирисок</b>\n\n"
+        "✨ Быстрая выдача\n"
+        "💳 Удобная оплата\n"
+        "🛡️ Безопасная сделка",
+        reply_markup=packages_keyboard()
+    )
+
+@dp.message(F.text.in_(PACKAGES.keys()))
+async def choose_package(message: Message):
+    item, price = PACKAGES[message.text]
+    order_id = str(random.randint(1000, 9999))
+    order = {
+        "order_id": order_id,
+        "buyer_id": message.from_user.id,
+        "buyer_name": message.from_user.full_name,
+        "buyer_username": message.from_user.username,
+        "item": item,
+        "price": price,
+        "receiver": None,
+        "status": "waiting_username",
+    }
+    orders[message.from_user.id] = order
+    orders_by_id[order_id] = order
+    await message.answer(
+        "👤 <b>Введите username получателя</b>\n\n"
+        "Пример:\n"
+        "<code>@username</code>\n\n"
+        "⚠️ На этот username будут выданы ириски."
+    )
 
 
-@dp.message(Command("баланс"))
-async def balance(message: Message):
-    get_user(message.from_user.id, message.from_user.full_name)
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (message.from_user.id,))
-    user_balance = cursor.fetchone()[0]
-    await message.answer(f"👏 Ваш баланс: <b>{user_balance}</b> ладушек")
+@dp.message(F.text == "👤 Профиль")
+async def profile(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "нет username"
 
-
-@dp.message(Command("выдать"))
-async def give(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) != 3 or not args[1].isdigit() or not args[2].isdigit():
-        await message.answer("Пример: /выдать 123456789 100")
-        return
-
-    user_id, amount = int(args[1]), int(args[2])
-    cursor.execute("INSERT OR IGNORE INTO users(user_id, username) VALUES(?,?)", (user_id, "Пользователь"))
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-    db.commit()
-    await message.answer(f"✅ Выдано {amount} ладушек")
-
-
-@dp.message(Command("забрать"))
-async def take(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) != 3 or not args[1].isdigit() or not args[2].isdigit():
-        await message.answer("Пример: /забрать 123456789 100")
-        return
-
-    user_id, amount = int(args[1]), int(args[2])
-    cursor.execute("UPDATE users SET balance = MAX(balance - ?, 0) WHERE user_id=?", (amount, user_id))
-    db.commit()
-    await message.answer(f"❌ Забрано {amount} ладушек")
-
-
-@dp.message(Command("штраф"))
-async def fine(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 4 or not args[1].isdigit() or not args[2].isdigit():
-        await message.answer("Пример: /штраф 123456789 20 Опоздал")
-        return
-
-    user_id, amount, reason = int(args[1]), int(args[2]), " ".join(args[3:])
-    cursor.execute("UPDATE users SET balance = MAX(balance - ?, 0) WHERE user_id=?", (amount, user_id))
-    db.commit()
-    await message.answer(f"🚨 Штраф\n\n➖ {amount} ладушек\n📝 Причина: {reason}")
-
-
-@dp.message(Command("ежедневка"))
-async def daily(message: Message):
-    get_user(message.from_user.id, message.from_user.full_name)
-    cursor.execute("SELECT last_daily FROM users WHERE user_id=?", (message.from_user.id,))
-    last = cursor.fetchone()[0]
-    now = int(time.time())
-
-    if now - last < 86400:
-        await message.answer("⏰ Ежедневка уже получена")
+    if user_id == ADMIN_ID:
+        total_orders, total_candies = get_total_stats()
+        await message.answer(
+            "👤 <b>Ваш профиль</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"📛 Username: @{username}\n"
+            f"📦 Всего заказов: <b>{total_orders}</b>\n"
+            f"🍬 Всего куплено ирисок: <b>{total_candies}</b>",
+            reply_markup=main_keyboard()
+        )
         return
 
-    cursor.execute("UPDATE users SET balance = balance + 25, last_daily=? WHERE user_id=?", (now, message.from_user.id))
-    db.commit()
-    await message.answer("🎁 Вы получили 25 ладушек!")
+    data = get_user_profile(user_id, message.from_user.username)
+    show_username = data.get("username") or username
+    if show_username != "нет username" and not show_username.startswith("@"):
+        show_username = "@" + show_username
 
+    await message.answer(
+        "👤 <b>Ваш профиль</b>\n\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
+        f"📛 Username: {show_username}\n"
+        f"📦 Заказов: <b>{data.get('orders', 0)}</b>\n"
+        f"🍬 Куплено ирисок: <b>{data.get('candies', 0)}</b>",
+        reply_markup=main_keyboard()
+    )
 
-@dp.message(Command("топ"))
-async def top(message: Message):
-    cursor.execute("SELECT username, balance FROM users ORDER BY balance DESC LIMIT 10")
-    users = cursor.fetchall()
-    text = "🏆 ТОП ЛАДУШЕК\n\n"
-    for place, user in enumerate(users, start=1):
-        text += f"{place}. {user[0]} — {user[1]} 👏\n"
-    await message.answer(text)
+@dp.message(F.text == "⭐ Отзывы")
+async def reviews(message: Message):
+    await message.answer(f"⭐ Отзывы покупателей: {REVIEWS_LINK}", reply_markup=main_keyboard())
 
+@dp.message(F.text == "❓ FAQ")
+async def faq(message: Message):
+    await message.answer(
+        "❓ <b>Частые вопросы</b>\n\n"
+        "💬 <b>Как купить?</b>\n— Выберите пакет, укажите username, оплатите и отправьте чек.\n\n"
+        "⏳ <b>Сколько ждать?</b>\n— Заказ будет обработан в течение 24 часов 💛\n\n"
+        "🍬 <b>Куда придут ириски?</b>\n— На username, который вы указали.\n\n"
+        "💸 <b>Можно ли сделать возврат?</b>\n— Да, если заказ ещё не выполнен.\n\n"
+        "📸 <b>Отправил чек — что дальше?</b>\n— Ожидайте проверки администратора.",
+        reply_markup=main_keyboard()
+    )
+
+@dp.message(F.text == "🛠 Поддержка")
+async def support(message: Message):
+    await message.answer(
+        "🛠 <b>Поддержка Iris Store</b>\n\n"
+        "Если возник вопрос по оплате, выдаче или заказу — напишите:\n\n"
+        f"{SUPPORT_USERNAME}\n\n"
+        "💛 Ответим как можно быстрее.",
+        reply_markup=main_keyboard()
+    )
+
+@dp.message(F.text.startswith("@"))
+async def get_receiver(message: Message):
+    user_order = orders.get(message.from_user.id)
+    if not user_order or user_order.get("status") != "waiting_username":
+        return
+
+    user_order["receiver"] = message.text.strip()
+    user_order["status"] = "waiting_payment"
+
+    await message.answer(
+        "💳 <b>Оплата заказа</b>\n\n"
+        f"🧾 Номер заказа: <code>{order_code(user_order['order_id'])}</code>\n\n"
+        f"🍬 Товар: <b>{user_order['item']}</b>\n"
+        f"👤 Получатель: <b>{user_order['receiver']}</b>\n"
+        f"💸 Сумма: <b>{user_order['price']}</b>\n\n"
+        f"🏦 Банк: <b>{BANK_NAME}</b>\n"
+        "💳 Карта:\n"
+        f"<code>{CARD_NUMBER}</code>\n\n"
+        "⏳ Заказ будет обработан в течение 24 часов 💛\n\n"
+        "После оплаты нажмите кнопку ниже.",
+        reply_markup=pay_keyboard()
+    )
+
+@dp.message(F.text == "✅ Я оплатил")
+async def paid(message: Message):
+    user_order = orders.get(message.from_user.id)
+    if not user_order:
+        await message.answer("❌ Сначала выберите пакет ирисок.")
+        return
+    if not user_order.get("receiver"):
+        await message.answer("❌ Сначала укажите username получателя.")
+        return
+    if user_order.get("status") == "pending":
+        await message.answer("⏳ Ваш чек уже находится на проверке.")
+        return
+    if user_order.get("status") == "approved":
+        await message.answer("✅ Этот заказ уже одобрен. Чтобы купить ещё, выберите новый пакет.")
+        return
+
+    user_order["status"] = "waiting_photo"
+    await message.answer(
+        "📸 <b>Отправьте чек оплаты</b>\n\n"
+        "⚠️ Отправьте скриншот или фото оплаты."
+    )
+
+@dp.message(F.photo)
+async def get_payment_photo(message: Message):
+    user_order = orders.get(message.from_user.id)
+    if not user_order:
+        await message.answer("❌ Сначала выберите пакет ирисок.")
+        return
+    if user_order.get("status") == "pending":
+        await message.answer("⏳ Ваш чек уже находится на проверке.")
+        return
+    if user_order.get("status") == "approved":
+        await message.answer("✅ Этот заказ уже одобрен. Чтобы купить ещё, выберите новый пакет.")
+        return
+    if user_order.get("status") != "waiting_photo":
+        await message.answer("❌ Сначала нажмите кнопку ✅ Я оплатил.")
+        return
+
+    user_order["status"] = "pending"
+    buyer_username = f"@{user_order['buyer_username']}" if user_order["buyer_username"] else "нет username"
+
+    await message.answer(
+        f"🟡 <b>Заказ {order_code(user_order['order_id'])}</b>\n\n"
+        "✅ Чек успешно отправлен на проверку.\n\n"
+        "⏳ Заказ будет обработан в течение 24 часов 💛\n\n"
+        "Пожалуйста, ожидайте ответа.",
+        reply_markup=main_keyboard()
+    )
+
+    caption = (
+        "🧾 <b>Новый заказ</b>\n\n"
+        f"🆔 Номер: <code>{order_code(user_order['order_id'])}</code>\n\n"
+        f"👤 Покупатель: <b>{user_order['buyer_name']}</b>\n"
+        f"🔗 Username: {buyer_username}\n"
+        f"🆔 ID: <code>{message.from_user.id}</code>\n\n"
+        f"🍬 Товар: <b>{user_order['item']}</b>\n"
+        f"🎯 Получатель: <b>{user_order['receiver']}</b>\n"
+        f"💸 Сумма: <b>{user_order['price']}</b>\n\n"
+        "📸 Чек оплаты"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{message.from_user.id}_{user_order['order_id']}"),
+        InlineKeyboardButton(text="❌ Отказать", callback_data=f"deny_{message.from_user.id}_{user_order['order_id']}")
+    ]])
+    await bot.send_photo(ADMIN_ID, photo=message.photo[-1].file_id, caption=caption, reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def approve_payment(call: CallbackQuery):
+    data = call.data.replace("approve_", "", 1)
+    user_id_text, order_id = data.split("_", 1)
+    user_id = int(user_id_text)
+    user_order = orders_by_id.get(order_id)
+    if not user_order or user_order.get("status") == "approved":
+        await call.answer("Заказ уже обработан или не найден", show_alert=True)
+        return
+
+    item = user_order["item"]
+    add_user_stats(
+        user_order["buyer_id"],
+        user_order.get("buyer_username"),
+        item
+    )
+    user_order["status"] = "approved"
+
+    await bot.send_message(
+        user_id,
+        f"✅ <b>Заказ {order_code(order_id)} выполнен!</b>\n\n"
+        "🍬 Ириски успешно выданы 💜\n\n"
+        "Спасибо за покупку в Iris Store!"
+    )
+    try:
+        await bot.send_message(
+            CHANNEL_ID,
+            "✅ <b>Покупатель получил ириски</b>\n\n"
+            f"🧾 Номер заказа: <b>{order_code(order_id)}</b>\n"
+            f"🍬 Количество: <b>{item}</b>\n"
+            "💎 Статус: успешно получено\n\n"
+            "🛍️ Спасибо за покупку в <b>Iris Store</b> 💜"
+        )
+    except Exception as e:
+        print("Review post error:", e)
+
+    await call.message.edit_caption(caption=(call.message.caption or "") + "\n\n✅ <b>ОДОБРЕНО</b>")
+    await call.answer("Одобрено")
+
+@dp.callback_query(F.data.startswith("deny_"))
+async def deny_payment(call: CallbackQuery):
+    data = call.data.replace("deny_", "", 1)
+    user_id_text, order_id = data.split("_", 1)
+    user_id = int(user_id_text)
+    user_order = orders_by_id.get(order_id)
+    if user_order:
+        user_order["status"] = "denied"
+    await bot.send_message(user_id, f"❌ <b>Заказ {order_code(order_id)} отклонён</b>\n\n💬 Поддержка: {SUPPORT_USERNAME}")
+    await call.message.edit_caption(caption=(call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>")
+    await call.answer("Отклонено")
 
 async def main():
-    asyncio.create_task(auto_ping_task())
+    print("Iris Store bot started ✅")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
+    Thread(target=keep_alive, daemon=True).start()
+    Thread(target=auto_ping, daemon=True).start()
     asyncio.run(main())
