@@ -1,16 +1,15 @@
-
 import asyncio
+import html
 import logging
 import os
-import html
-import sqlite3
+import urllib.request
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -18,34 +17,33 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove,
 )
-from aiogram.exceptions import TelegramAPIError
+from aiogram.client.default import DefaultBotProperties
 
 
-# ==================================================
+# ==========================================
 # НАСТРОЙКИ
-# ==================================================
+# ==========================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 ADMIN_ID = 7837011810
 
 CHANNEL_ID = "@zapillspost"
 
+PING_URL = "https://iris-store-bot-eqkf.onrender.com/"
+
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "Не найден BOT_TOKEN. Добавь токен в Environment Render."
-    )
+    raise RuntimeError("Не найден BOT_TOKEN в Environment Render")
 
 
-# ==================================================
+# ==========================================
 # ЗАПУСК БОТА
-# ==================================================
+# ==========================================
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
 bot = Bot(
@@ -55,139 +53,122 @@ bot = Bot(
     )
 )
 
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
 
-# ==================================================
-# БАЗА ДАННЫХ
-# ==================================================
-
-db = sqlite3.connect("suggestions.db")
-
-db.execute("""
-CREATE TABLE IF NOT EXISTS suggestions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    chat_id INTEGER NOT NULL,
-    message_id INTEGER NOT NULL,
-    author_name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending'
-)
-""")
-
-db.commit()
-
-
-# ==================================================
-# СОСТОЯНИЯ
-# ==================================================
-
-class SuggestionStates(StatesGroup):
-    waiting_post = State()
-    waiting_reason = State()
-
-
-# ==================================================
+# ==========================================
 # КЛАВИАТУРЫ
-# ==================================================
+# ==========================================
 
-def main_keyboard():
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(
+                text="📩 Предложить пост"
+            )
+        ]
+    ],
+    resize_keyboard=True
+)
 
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="📩 Предложить пост"
-                )
-            ]
-        ],
-        resize_keyboard=True
-    )
-
-
-def cancel_keyboard():
-
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="❌ Отмена"
-                )
-            ]
-        ],
-        resize_keyboard=True
-    )
+cancel_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(
+                text="❌ Отмена"
+            )
+        ]
+    ],
+    resize_keyboard=True
+)
 
 
-def admin_keyboard(request_id):
-
+def admin_keyboard(proposal_id: int):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="✅ Принять",
-                    callback_data=f"accept:{request_id}"
+                    callback_data=f"approve:{proposal_id}"
                 ),
                 InlineKeyboardButton(
                     text="❌ Отклонить",
-                    callback_data=f"reject:{request_id}"
+                    callback_data=f"reject:{proposal_id}"
                 )
             ]
         ]
     )
 
 
-# ==================================================
-# ССЫЛКА НА АВТОРА
-# ==================================================
+# ==========================================
+# СОСТОЯНИЯ
+# ==========================================
 
-def author_link(user_id, name):
+class ProposalStates(StatesGroup):
+    waiting_post = State()
 
-    safe_name = html.escape(name)
+
+class AdminStates(StatesGroup):
+    waiting_reason = State()
+
+
+# ==========================================
+# ХРАНИЛИЩЕ ЗАЯВОК
+# ==========================================
+
+proposals = {}
+
+proposal_counter = 0
+
+
+# ==========================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ==========================================
+
+def get_author(user):
+    name = html.escape(
+        user.full_name or "Пользователь"
+    )
 
     return (
-        f'<a href="tg://user?id={user_id}">'
-        f'{safe_name}</a>'
+        f'\n\n👤: '
+        f'<a href="tg://user?id={user.id}">'
+        f'{name}</a>'
     )
 
 
-# ==================================================
-# ПОЛУЧЕНИЕ ЗАЯВКИ
-# ==================================================
+def get_author_text(user):
+    name = html.escape(
+        user.full_name or "Пользователь"
+    )
 
-def get_request(request_id):
-
-    row = db.execute(
-        """
-        SELECT
-            id,
-            user_id,
-            chat_id,
-            message_id,
-            author_name,
-            status
-        FROM suggestions
-        WHERE id = ?
-        """,
-        (request_id,)
-    ).fetchone()
-
-    if not row:
-        return None
-
-    return {
-        "id": row[0],
-        "user_id": row[1],
-        "chat_id": row[2],
-        "message_id": row[3],
-        "author_name": row[4],
-        "status": row[5]
-    }
+    return (
+        f'👤: <a href="tg://user?id={user.id}">'
+        f'{name}</a>'
+    )
 
 
-# ==================================================
+def get_post_text(message):
+    if message.text:
+        return message.text
+
+    if message.caption:
+        return message.caption
+
+    return ""
+
+
+def is_supported_post(message):
+    return bool(
+        message.text
+        or message.photo
+        or message.video
+    )
+
+
+# ==========================================
 # ПРИВЕТСТВИЕ
-# ==================================================
+# ==========================================
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
@@ -196,45 +177,48 @@ async def start(message: Message, state: FSMContext):
 
     await message.answer(
         "👋 Привет!\n\n"
-        "Хочешь, чтобы другие люди узнали, "
-        "как проходит твоя жизнь?\n\n"
-        "Здесь можно поделиться историей, "
-        "фотографией, видео или просто написать, "
-        "что ты сейчас делаешь.\n\n"
-        "📩 Нажми кнопку ниже, чтобы предложить пост.",
-        reply_markup=main_keyboard()
+        "Добро пожаловать в предложку канала "
+        "«Вся твоя жизнь здесь».\n\n"
+        "Здесь ты можешь поделиться тем, "
+        "что сейчас делаешь, своей историей, "
+        "фото или видео.\n\n"
+        "Нажми кнопку ниже, чтобы предложить пост.",
+        reply_markup=main_keyboard
     )
 
 
-# ==================================================
+# ==========================================
 # НАЧАЛО ПРЕДЛОЖКИ
-# ==================================================
+# ==========================================
 
 @dp.message(F.text == "📩 Предложить пост")
-async def suggest_post(message: Message, state: FSMContext):
+async def start_proposal(
+    message: Message,
+    state: FSMContext
+):
 
     await state.set_state(
-        SuggestionStates.waiting_post
+        ProposalStates.waiting_post
     )
 
     await message.answer(
         "📩 Отправь свой пост следующим сообщением.\n\n"
         "Можно отправить:\n"
-        "📝 Текст\n"
-        "📸 Фото с подписью\n"
-        "🎥 Видео с подписью\n\n"
-        "После отправки заявка попадёт администратору.\n\n"
-        "Если передумал, нажми «❌ Отмена».",
-        reply_markup=cancel_keyboard()
+        "• Текст\n"
+        "• Фото с подписью\n"
+        "• Видео с подписью\n\n"
+        "После отправки заявка попадёт "
+        "администратору на проверку.",
+        reply_markup=cancel_keyboard
     )
 
 
-# ==================================================
-# ОТМЕНА ПРЕДЛОЖКИ
-# ==================================================
+# ==========================================
+# ОТМЕНА
+# ==========================================
 
 @dp.message(F.text == "❌ Отмена")
-async def cancel_suggestion(
+async def cancel_proposal(
     message: Message,
     state: FSMContext
 ):
@@ -242,225 +226,234 @@ async def cancel_suggestion(
     await state.clear()
 
     await message.answer(
-        "❌ Предложка отменена.",
-        reply_markup=main_keyboard()
+        "❌ Предложение поста отменено.",
+        reply_markup=main_keyboard
     )
 
 
-# ==================================================
-# ПОЛУЧЕНИЕ ПОСТА ОТ ПОЛЬЗОВАТЕЛЯ
-# ==================================================
+# ==========================================
+# ПОЛУЧЕНИЕ ПОСТА
+# ==========================================
 
-@dp.message(SuggestionStates.waiting_post)
-async def receive_post(
+@dp.message(ProposalStates.waiting_post)
+async def receive_proposal(
     message: Message,
     state: FSMContext
 ):
 
-    # Разрешаем только текст, фото и видео
+    global proposal_counter
 
-    if not (
-        message.text
-        or message.photo
-        or message.video
-    ):
+    if not is_supported_post(message):
 
         await message.answer(
-            "❌ Отправь текст, фото или видео."
+            "⚠️ Можно отправить только текст, "
+            "фото или видео.\n\n"
+            "Попробуй ещё раз или нажми "
+            "«❌ Отмена»."
         )
 
         return
 
-    if message.text and message.text.startswith("/"):
+    proposal_counter += 1
 
-        await message.answer(
-            "Отправь обычный текст, фото или видео."
-        )
-
-        return
+    proposal_id = proposal_counter
 
     user = message.from_user
 
-    author_name = (
-        user.full_name
-        or user.username
-        or "Автор"
+    proposals[proposal_id] = {
+        "user_id": user.id,
+        "chat_id": message.chat.id,
+        "message_id": message.message_id,
+        "status": "pending",
+        "author_name": user.full_name,
+    }
+
+    author = get_author_text(user)
+
+    admin_caption = (
+        f"📩 <b>Новая предложка #{proposal_id}</b>\n\n"
+        f"Отправитель: {author}\n"
+        f"ID: <code>{user.id}</code>\n\n"
+        f"👇 <b>Предложенный пост:</b>\n"
+        f"{html.escape(get_post_text(message))}"
     )
 
-    # Сохраняем заявку
-
-    cursor = db.execute(
-        """
-        INSERT INTO suggestions (
-            user_id,
-            chat_id,
-            message_id,
-            author_name,
-            status
-        )
-        VALUES (?, ?, ?, ?, 'pending')
-        """,
-        (
-            user.id,
-            message.chat.id,
-            message.message_id,
-            author_name
-        )
-    )
-
-    request_id = cursor.lastrowid
-
-    db.commit()
+    keyboard = admin_keyboard(proposal_id)
 
     try:
 
-        # КОПИРУЕМ пост администратору
-        # Никакого forward_message здесь нет!
+        # Текстовый пост
+        if message.text:
 
-        await bot.copy_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=admin_keyboard(request_id)
-        )
+            await bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_caption,
+                reply_markup=keyboard
+            )
 
-        # Информация о заявке
+        # Фото
+        elif message.photo:
 
-        await bot.send_message(
-            ADMIN_ID,
-            f"📩 Новая заявка №{request_id}\n\n"
-            f"👤 Автор: {html.escape(author_name)}\n"
-            f"🆔 ID: <code>{user.id}</code>"
-        )
+            await bot.copy_message(
+                chat_id=ADMIN_ID,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+                caption=admin_caption,
+                reply_markup=keyboard
+            )
+
+        # Видео
+        elif message.video:
+
+            await bot.copy_message(
+                chat_id=ADMIN_ID,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+                caption=admin_caption,
+                reply_markup=keyboard
+            )
 
         await message.answer(
             "✅ Твой пост отправлен администратору!\n\n"
-            "Ожидай решения.",
-            reply_markup=main_keyboard()
+            "После проверки ты получишь уведомление.",
+            reply_markup=main_keyboard
         )
 
         await state.clear()
 
-    except TelegramAPIError as error:
+    except Exception as error:
 
         logging.exception(
-            "Ошибка отправки заявки: %s",
-            error
+            "Ошибка при отправке заявки администратору"
         )
 
         await message.answer(
-            "❌ Не удалось отправить заявку.\n"
-            "Попробуй ещё раз."
+            "⚠️ Не удалось отправить пост.\n"
+            "Попробуй ещё раз немного позже."
         )
 
 
-# ==================================================
+# ==========================================
 # ПУБЛИКАЦИЯ ПОСТА В КАНАЛ
-# ==================================================
+# ==========================================
 
-async def publish_post(request):
+async def publish_post(proposal_id: int):
 
-    user_id = request["user_id"]
+    proposal = proposals.get(proposal_id)
 
-    chat_id = request["chat_id"]
+    if not proposal:
+        raise ValueError("Заявка не найдена")
 
-    message_id = request["message_id"]
+    user_id = proposal["user_id"]
 
-    author_name = request["author_name"]
+    chat_id = proposal["chat_id"]
 
-    author = author_link(
-        user_id,
-        author_name
-    )
+    message_id = proposal["message_id"]
 
-    # Получаем оригинальное сообщение
+    user = await bot.get_chat(user_id)
 
-    original = await bot.copy_message(
-        chat_id=CHANNEL_ID,
+    author = get_author(user)
+
+    # Получаем исходное сообщение
+    original = await bot.forward_message(
+        chat_id=ADMIN_ID,
         from_chat_id=chat_id,
         message_id=message_id
     )
 
-    # ==============================================
-    # ТЕКСТОВЫЙ ПОСТ
-    # ==============================================
+    try:
 
-    if original.text:
+        # Текст
+        if original.text:
 
-        text = original.text
+            text = original.text
 
-        # Оставляем место для подписи автора
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=html.escape(text) + author,
+                parse_mode=ParseMode.HTML
+            )
 
-        if len(text) > 3900:
-            text = text[:3900] + "..."
+        # Фото
+        elif original.photo:
 
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"{html.escape(text)}\n\n"
-                f"👤: {author}"
-            ),
-            parse_mode=ParseMode.HTML
-        )
+            caption = (
+                html.escape(original.caption or "")
+                + author
+            )
 
-        # Удаляем временную копию
+            await bot.copy_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=ADMIN_ID,
+                message_id=original.message_id,
+                caption=caption,
+                parse_mode=ParseMode.HTML
+            )
 
-        await bot.delete_message(
-            chat_id=CHANNEL_ID,
-            message_id=original.message_id
-        )
+        # Видео
+        elif original.video:
 
-    # ==============================================
-    # ФОТО ИЛИ ВИДЕО
-    # ==============================================
+            caption = (
+                html.escape(original.caption or "")
+                + author
+            )
 
-    else:
+            await bot.copy_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=ADMIN_ID,
+                message_id=original.message_id,
+                caption=caption,
+                parse_mode=ParseMode.HTML
+            )
 
-        caption = original.caption or ""
+        else:
 
-        # Оставляем место для автора
+            await bot.copy_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=ADMIN_ID,
+                message_id=original.message_id
+            )
 
-        if len(caption) > 900:
-            caption = caption[:900] + "..."
+    finally:
 
-        new_caption = (
-            f"{html.escape(caption)}\n\n"
-            f"👤: {author}"
-        )
+        # Удаляем временную пересылку из админ-чата
+        try:
 
-        # Редактируем подпись скопированного медиа
+            await bot.delete_message(
+                chat_id=ADMIN_ID,
+                message_id=original.message_id
+            )
 
-        await bot.edit_message_caption(
-            chat_id=CHANNEL_ID,
-            message_id=original.message_id,
-            caption=new_caption,
-            parse_mode=ParseMode.HTML
-        )
+        except Exception:
+
+            pass
 
 
-# ==================================================
-# ПРИНЯТИЕ ЗАЯВКИ
-# ==================================================
+# ==========================================
+# ПРИНЯТИЕ ПОСТА
+# ==========================================
 
-@dp.callback_query(F.data.startswith("accept:"))
-async def accept_post(callback: CallbackQuery):
+@dp.callback_query(F.data.startswith("approve:"))
+async def approve_proposal(
+    callback: CallbackQuery
+):
 
     if callback.from_user.id != ADMIN_ID:
 
         await callback.answer(
-            "⛔ Нет доступа!",
+            "⛔ У тебя нет прав.",
             show_alert=True
         )
 
         return
 
-    request_id = int(
+    proposal_id = int(
         callback.data.split(":")[1]
     )
 
-    request = get_request(request_id)
+    proposal = proposals.get(proposal_id)
 
-    if not request:
+    if not proposal:
 
         await callback.answer(
             "Заявка не найдена.",
@@ -469,10 +462,10 @@ async def accept_post(callback: CallbackQuery):
 
         return
 
-    if request["status"] != "pending":
+    if proposal["status"] != "pending":
 
         await callback.answer(
-            "Заявка уже обработана.",
+            "Эта заявка уже обработана.",
             show_alert=True
         )
 
@@ -480,62 +473,45 @@ async def accept_post(callback: CallbackQuery):
 
     try:
 
-        # Публикуем пост
+        await publish_post(proposal_id)
 
-        await publish_post(request)
+        proposal["status"] = "approved"
 
-        # Обновляем статус
-
-        db.execute(
-            """
-            UPDATE suggestions
-            SET status = 'accepted'
-            WHERE id = ?
-            """,
-            (request_id,)
+        await bot.send_message(
+            chat_id=proposal["user_id"],
+            text=(
+                "✅ Твой пост принят "
+                "и опубликован в канале!\n\n"
+                "Спасибо за предложку ❤️"
+            )
         )
-
-        db.commit()
-
-        # Убираем кнопки
 
         await callback.message.edit_reply_markup(
             reply_markup=None
         )
 
         await callback.answer(
-            "✅ Пост опубликован!"
+            "Пост опубликован!"
         )
 
-        # Сообщаем автору
-
-        await bot.send_message(
-            request["user_id"],
-            "✅ Твой пост опубликован в канале!\n\n"
-            "Спасибо за предложку.",
-            reply_markup=main_keyboard()
-        )
-
-    except TelegramAPIError as error:
+    except Exception as error:
 
         logging.exception(
-            "Ошибка публикации: %s",
-            error
+            "Ошибка публикации"
         )
 
         await callback.answer(
-            "❌ Ошибка публикации. "
-            "Проверь права бота в канале.",
+            "Ошибка публикации. Проверь права бота.",
             show_alert=True
         )
 
 
-# ==================================================
-# ОТКЛОНЕНИЕ ЗАЯВКИ
-# ==================================================
+# ==========================================
+# ОТКЛОНЕНИЕ ПОСТА
+# ==========================================
 
 @dp.callback_query(F.data.startswith("reject:"))
-async def reject_post(
+async def reject_proposal(
     callback: CallbackQuery,
     state: FSMContext
 ):
@@ -543,19 +519,19 @@ async def reject_post(
     if callback.from_user.id != ADMIN_ID:
 
         await callback.answer(
-            "⛔ Нет доступа!",
+            "⛔ У тебя нет прав.",
             show_alert=True
         )
 
         return
 
-    request_id = int(
+    proposal_id = int(
         callback.data.split(":")[1]
     )
 
-    request = get_request(request_id)
+    proposal = proposals.get(proposal_id)
 
-    if not request:
+    if not proposal:
 
         await callback.answer(
             "Заявка не найдена.",
@@ -564,7 +540,7 @@ async def reject_post(
 
         return
 
-    if request["status"] != "pending":
+    if proposal["status"] != "pending":
 
         await callback.answer(
             "Заявка уже обработана.",
@@ -573,117 +549,154 @@ async def reject_post(
 
         return
 
-    # Запоминаем заявку для администратора
+    proposal["status"] = "waiting_reason"
 
     await state.set_state(
-        SuggestionStates.waiting_reason
+        AdminStates.waiting_reason
     )
 
     await state.update_data(
-        request_id=request_id,
-        user_id=request["user_id"]
+        proposal_id=proposal_id
     )
 
     await callback.message.answer(
-        f"❌ Отклонение заявки №{request_id}\n\n"
-        "Напиши причину отклонения.\n"
-        "Она будет отправлена автору."
+        f"✍️ Напиши причину отказа "
+        f"для заявки #{proposal_id}.\n\n"
+        f"Следующее сообщение будет отправлено автору."
     )
 
-    await callback.answer(
-        "Ожидаю причину."
-    )
+    await callback.answer()
 
 
-# ==================================================
-# ОТПРАВКА ПРИЧИНЫ ОТКАЗА
-# ==================================================
+# ==========================================
+# ПРИЧИНА ОТКАЗА
+# ==========================================
 
-@dp.message(SuggestionStates.waiting_reason)
-async def reject_reason(
+@dp.message(AdminStates.waiting_reason)
+async def send_rejection_reason(
     message: Message,
     state: FSMContext
 ):
 
-    reason = message.text or message.caption
-
-    if not reason:
-
-        await message.answer(
-            "❌ Напиши причину обычным текстом."
-        )
-
+    if message.from_user.id != ADMIN_ID:
         return
 
     data = await state.get_data()
 
-    request_id = data["request_id"]
+    proposal_id = data.get("proposal_id")
 
-    user_id = data["user_id"]
+    proposal = proposals.get(proposal_id)
 
-    request = get_request(request_id)
-
-    if not request or request["status"] != "pending":
+    if not proposal:
 
         await message.answer(
-            "Заявка уже обработана."
+            "Заявка не найдена."
         )
 
         await state.clear()
 
         return
 
+    reason = message.text or message.caption
+
+    if not reason:
+
+        await message.answer(
+            "Напиши причину отказа текстом."
+        )
+
+        return
+
     try:
 
-        # Отправляем причину автору
-
         await bot.send_message(
-            user_id,
-            "❌ Твой пост отклонён.\n\n"
-            f"Причина: {html.escape(reason)}",
-            reply_markup=main_keyboard()
+            chat_id=proposal["user_id"],
+            text=(
+                "❌ Твой пост отклонён.\n\n"
+                f"Причина:\n{html.escape(reason)}"
+            )
         )
 
-        # Обновляем статус
-
-        db.execute(
-            """
-            UPDATE suggestions
-            SET status = 'rejected'
-            WHERE id = ?
-            """,
-            (request_id,)
-        )
-
-        db.commit()
+        proposal["status"] = "rejected"
 
         await message.answer(
-            "✅ Причина отправлена автору.",
-            reply_markup=ReplyKeyboardRemove()
+            "✅ Причина отказа отправлена автору."
         )
 
-    except TelegramAPIError as error:
+    except Exception as error:
 
         logging.exception(
-            "Ошибка отправки причины: %s",
-            error
+            "Ошибка отправки отказа"
         )
 
         await message.answer(
-            "❌ Не удалось отправить причину."
+            "Не удалось отправить отказ пользователю."
         )
 
     await state.clear()
 
 
-# ==================================================
+# ==========================================
+# АВТОПИНГ RENDER
+# ==========================================
+
+def ping_site():
+
+    request = urllib.request.Request(
+        PING_URL,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        }
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=30
+    ) as response:
+
+        return response.status
+
+
+async def auto_ping():
+
+    while True:
+
+        try:
+
+            status = await asyncio.to_thread(
+                ping_site
+            )
+
+            logging.info(
+                f"Автопинг: сайт ответил {status}"
+            )
+
+        except Exception as error:
+
+            logging.warning(
+                f"Сайт не отвечает: {error}"
+            )
+
+        # Повторная попытка через 5 минут
+        await asyncio.sleep(300)
+
+
+# ==========================================
 # ЗАПУСК
-# ==================================================
+# ==========================================
 
 async def main():
 
-    logging.info("Бот предложки запущен!")
+    logging.info(
+        "Бот предложки запускается..."
+    )
 
+    # Запускаем автопинг
+    asyncio.create_task(
+        auto_ping()
+    )
+
+    # Запускаем бота
     await dp.start_polling(bot)
 
 
