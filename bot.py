@@ -21,7 +21,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "7837011810"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@IrisStoreMarket")
 REVIEWS_LINK = "https://t.me/IrisStoreMarket"
 SUPPORT_USERNAME = "@Artemwesh"
-SITE_URL = "https://iris-store-bot.onrender.com/"
+SITE_URL = "https://iris-store-bot-eqkf.onrender.com/"
 CARD_NUMBER = "5355 2800 2289 5252"
 BANK_NAME = "PUMB"
 
