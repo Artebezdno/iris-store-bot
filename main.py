@@ -61,7 +61,6 @@ class PingHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive!")
 
     def log_message(self, format, *args):
-        # Отключаем лишние логи запросов сервера в консоли
         pass
 
 def run_web_server():
@@ -70,7 +69,6 @@ def run_web_server():
     logging.info(f"Веб-сервер запущен на порту {port}")
     server.serve_forever()
 
-# Запускаем веб-сервер в отдельном потоке, чтобы он держал Render бодрым
 Thread(target=run_web_server, daemon=True).start()
 
 
@@ -145,8 +143,13 @@ class SuggestionStates(StatesGroup):
     waiting_post = State()
 
 
+class SupportStates(StatesGroup):
+    waiting_message = State()
+
+
 class AdminStates(StatesGroup):
     waiting_reason = State()
+    waiting_support_reply = State()
 
 
 # ==================================================
@@ -157,9 +160,8 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(
-                    text="📩 Предложить пост"
-                )
+                KeyboardButton(text="📩 Предложить пост"),
+                KeyboardButton(text="💬 Поддержка")
             ]
         ],
         resize_keyboard=True
@@ -170,9 +172,7 @@ def cancel_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(
-                    text="❌ Отмена"
-                )
+                KeyboardButton(text="❌ Отмена")
             ]
         ],
         resize_keyboard=True
@@ -190,6 +190,23 @@ def admin_keyboard(request_id):
                 InlineKeyboardButton(
                     text="❌ Отклонить",
                     callback_data=f"reject:{request_id}"
+                )
+            ]
+        ]
+    )
+
+
+def support_admin_keyboard(user_id):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Ответить",
+                    callback_data=f"support_reply:{user_id}"
+                ),
+                InlineKeyboardButton(
+                    text="✅ Прочитано",
+                    callback_data="support_read"
                 )
             ]
         ]
@@ -259,7 +276,7 @@ async def start(message: Message, state: FSMContext):
         "Здесь можно поделиться историей, "
         "фотографией, видео или просто написать, "
         "что ты сейчас делаешь.\n\n"
-        "📩 Нажми кнопку ниже, чтобы предложить пост.",
+        "📩 Нажми «Предложить пост» или обратись в «Поддержку».",
         reply_markup=main_keyboard()
     )
 
@@ -270,30 +287,146 @@ async def start(message: Message, state: FSMContext):
 
 @dp.message(F.text == "📩 Предложить пост")
 async def suggest_post(message: Message, state: FSMContext):
-    await state.set_state(
-        SuggestionStates.waiting_post
-    )
+    await state.set_state(SuggestionStates.waiting_post)
     await message.answer(
         "📩 Отправь свой пост следующим сообщением.\n\n"
         "Можно отправить:\n"
         "📝 Текст\n"
         "📸 Фото с подписью или без неё\n"
         "🎥 Видео с подписью или без неё\n\n"
-        "После отправки заявка попадёт администратору.\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
 
 
 # ==================================================
-# ОТМЕНА
+# ПОДДЕРЖКА — ПОЛЬЗОВАТЕЛЬ
+# ==================================================
+
+@dp.message(F.text == "💬 Поддержка")
+async def support_start(message: Message, state: FSMContext):
+    await state.set_state(SupportStates.waiting_message)
+    await message.answer(
+        "💬 Напиши свое сообщение для поддержки.\n\n"
+        "Можешь отправить текст, фото или видео с описанием вашего вопроса или проблемы.\n\n"
+        "Если передумал, нажми «❌ Отмена».",
+        reply_markup=cancel_keyboard()
+    )
+
+
+@dp.message(SupportStates.waiting_message)
+async def receive_support_message(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Запрос в поддержку отменён.", reply_markup=main_keyboard())
+        return
+
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "Нет юзернейма"
+    author_name = html.escape(user.full_name or "Пользователь")
+    user_info = f"👤 Пользователь: {author_name}\n🔗 Юзернейм: {username}\n🆔 ID: <code>{user.id}</code>"
+
+    try:
+        if message.text:
+            await bot.send_message(
+                ADMIN_ID,
+                f"💬 <b>Новое обращение в поддержку!</b>\n\n{user_info}\n\n📝 <b>Сообщение:</b>\n{html.escape(message.text)}",
+                reply_markup=support_admin_keyboard(user.id)
+            )
+        elif message.photo:
+            file_id = message.photo[-1].file_id
+            caption = message.caption or ""
+            await bot.send_photo(
+                ADMIN_ID,
+                photo=file_id,
+                caption=f"💬 <b>Новое обращение в поддержку!</b>\n\n{user_info}\n\n📝 <b>Подпись:</b>\n{html.escape(caption)}",
+                reply_markup=support_admin_keyboard(user.id)
+            )
+        elif message.video:
+            file_id = message.video.file_id
+            caption = message.caption or ""
+            await bot.send_video(
+                ADMIN_ID,
+                video=file_id,
+                caption=f"💬 <b>Новое обращение в поддержку!</b>\n\n{user_info}\n\n📝 <b>Подпись:</b>\n{html.escape(caption)}",
+                reply_markup=support_admin_keyboard(user.id)
+            )
+        else:
+            await message.answer("❌ Поддерживаются только текст, фото или видео.")
+            return
+
+        await message.answer(
+            "✅ Ваше сообщение отправлено в поддержку!\nОжидайте ответа администратора.",
+            reply_markup=main_keyboard()
+        )
+        await state.clear()
+
+    except TelegramAPIError as error:
+        logging.exception("Ошибка при отправке в поддержку: %s", error)
+        await message.answer("❌ Не удалось отправить сообщение. Попробуйте позже.")
+
+
+# ==================================================
+# ПОДДЕРЖКА — АДМИН
+# ==================================================
+
+@dp.callback_query(F.data == "support_read")
+async def support_read_callback(callback: CallbackQuery):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("✅ Отмечено как прочитанное.")
+
+
+@dp.callback_query(F.data.startswith("support_reply:"))
+async def support_reply_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+
+    target_user_id = int(callback.data.split(":")[1])
+    await state.set_state(AdminStates.waiting_support_reply)
+    await state.update_data(target_user_id=target_user_id)
+
+    await callback.message.answer(
+        f"✍️ Напиши текст ответа для пользователя (ID: <code>{target_user_id}</code>):"
+    )
+    await callback.answer()
+
+
+@dp.message(AdminStates.waiting_support_reply)
+async def send_support_reply(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    reply_text = message.text or message.caption
+    if not reply_text:
+        await message.answer("❌ Отправь ответ текстом.")
+        return
+
+    data = await state.get_data()
+    target_user_id = data.get("target_user_id")
+
+    try:
+        await bot.send_message(
+            target_user_id,
+            f"🎧 <b>Ответ службы поддержки:</b>\n\n{html.escape(reply_text)}"
+        )
+        await message.answer("✅ Ответ успешно отправлен пользователю!")
+    except TelegramAPIError as error:
+        logging.exception("Ошибка отправки ответа поддержки: %s", error)
+        await message.answer("❌ Не удалось доставить ответ пользователю (возможно, бот заблокирован).")
+
+    await state.clear()
+
+
+# ==================================================
+# ОТМЕНА ОБЩАЯ
 # ==================================================
 
 @dp.message(F.text == "❌ Отмена")
 async def cancel_suggestion(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "❌ Предложка отменена.",
+        "❌ Действие отменено.",
         reply_markup=main_keyboard()
     )
 
