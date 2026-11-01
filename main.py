@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -48,13 +47,18 @@ if not BOT_TOKEN:
 
 
 # ==================================================
-# ЗАПУСК БОТА
+# ЛОГИ
 # ==================================================
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+# ==================================================
+# БОТ
+# ==================================================
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -79,9 +83,36 @@ CREATE TABLE IF NOT EXISTS suggestions (
     chat_id INTEGER NOT NULL,
     message_id INTEGER NOT NULL,
     author_name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending'
+    status TEXT NOT NULL DEFAULT 'pending',
+    post_text TEXT DEFAULT '',
+    post_caption TEXT DEFAULT '',
+    post_type TEXT DEFAULT 'text'
 )
 """)
+
+# Добавляем новые колонки, если база старая
+
+columns = [
+    row[1]
+    for row in db.execute(
+        "PRAGMA table_info(suggestions)"
+    ).fetchall()
+]
+
+if "post_text" not in columns:
+    db.execute(
+        "ALTER TABLE suggestions ADD COLUMN post_text TEXT DEFAULT ''"
+    )
+
+if "post_caption" not in columns:
+    db.execute(
+        "ALTER TABLE suggestions ADD COLUMN post_caption TEXT DEFAULT ''"
+    )
+
+if "post_type" not in columns:
+    db.execute(
+        "ALTER TABLE suggestions ADD COLUMN post_type TEXT DEFAULT 'text'"
+    )
 
 db.commit()
 
@@ -92,6 +123,9 @@ db.commit()
 
 class SuggestionStates(StatesGroup):
     waiting_post = State()
+
+
+class AdminStates(StatesGroup):
     waiting_reason = State()
 
 
@@ -173,7 +207,10 @@ def get_request(request_id):
             chat_id,
             message_id,
             author_name,
-            status
+            status,
+            post_text,
+            post_caption,
+            post_type
         FROM suggestions
         WHERE id = ?
         """,
@@ -189,7 +226,10 @@ def get_request(request_id):
         "chat_id": row[2],
         "message_id": row[3],
         "author_name": row[4],
-        "status": row[5]
+        "status": row[5],
+        "post_text": row[6] or "",
+        "post_caption": row[7] or "",
+        "post_type": row[8] or "text"
     }
 
 
@@ -229,8 +269,8 @@ async def suggest_post(message: Message, state: FSMContext):
         "📩 Отправь свой пост следующим сообщением.\n\n"
         "Можно отправить:\n"
         "📝 Текст\n"
-        "📸 Фото с подписью\n"
-        "🎥 Видео с подписью\n\n"
+        "📸 Фото с подписью или без неё\n"
+        "🎥 Видео с подписью или без неё\n\n"
         "После отправки заявка попадёт администратору.\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
@@ -238,7 +278,7 @@ async def suggest_post(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ОТМЕНА ПРЕДЛОЖКИ
+# ОТМЕНА
 # ==================================================
 
 @dp.message(F.text == "❌ Отмена")
@@ -256,7 +296,7 @@ async def cancel_suggestion(
 
 
 # ==================================================
-# ПОЛУЧЕНИЕ ПОСТА ОТ ПОЛЬЗОВАТЕЛЯ
+# ПОЛУЧЕНИЕ ПОСТА
 # ==================================================
 
 @dp.message(SuggestionStates.waiting_post)
@@ -265,22 +305,36 @@ async def receive_post(
     state: FSMContext
 ):
 
-    if not (
-        message.text
-        or message.photo
-        or message.video
-    ):
+    # Определяем тип поста
+
+    if message.text and not message.text.startswith("/"):
+
+        post_type = "text"
+
+        post_text = message.text
+
+        post_caption = ""
+
+    elif message.photo:
+
+        post_type = "photo"
+
+        post_text = ""
+
+        post_caption = message.caption or ""
+
+    elif message.video:
+
+        post_type = "video"
+
+        post_text = ""
+
+        post_caption = message.caption or ""
+
+    else:
 
         await message.answer(
             "❌ Отправь текст, фото или видео."
-        )
-
-        return
-
-    if message.text and message.text.startswith("/"):
-
-        await message.answer(
-            "Отправь обычный текст, фото или видео."
         )
 
         return
@@ -293,6 +347,8 @@ async def receive_post(
         or "Автор"
     )
 
+    # Сохраняем заявку вместе с текстом
+
     cursor = db.execute(
         """
         INSERT INTO suggestions (
@@ -300,15 +356,21 @@ async def receive_post(
             chat_id,
             message_id,
             author_name,
-            status
+            status,
+            post_text,
+            post_caption,
+            post_type
         )
-        VALUES (?, ?, ?, ?, 'pending')
+        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
         """,
         (
             user.id,
             message.chat.id,
             message.message_id,
-            author_name
+            author_name,
+            post_text,
+            post_caption,
+            post_type
         )
     )
 
@@ -318,12 +380,16 @@ async def receive_post(
 
     try:
 
+        # Копируем оригинальный пост админу
+
         await bot.copy_message(
             chat_id=ADMIN_ID,
             from_chat_id=message.chat.id,
             message_id=message.message_id,
             reply_markup=admin_keyboard(request_id)
         )
+
+        # Информация об авторе
 
         await bot.send_message(
             ADMIN_ID,
@@ -354,7 +420,7 @@ async def receive_post(
 
 
 # ==================================================
-# ПУБЛИКАЦИЯ ПОСТА В КАНАЛ
+# ПУБЛИКАЦИЯ ПОСТА
 # ==================================================
 
 async def publish_post(request):
@@ -367,57 +433,74 @@ async def publish_post(request):
 
     author_name = request["author_name"]
 
+    post_type = request["post_type"]
+
+    post_text = request["post_text"]
+
+    post_caption = request["post_caption"]
+
     author = author_link(
         user_id,
         author_name
     )
 
-    # Получаем оригинальное сообщение
-    # Через copy_message, без пересылки
+    # ==============================================
+    # ТЕКСТОВЫЙ ПОСТ
+    # ==============================================
 
-    original = await bot.copy_message(
+    if post_type == "text":
+
+        text = html.escape(post_text)
+
+        final_text = (
+            f"{text}\n\n"
+            f"👤: {author}"
+        )
+
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=final_text,
+            parse_mode=ParseMode.HTML
+        )
+
+        return
+
+    # ==============================================
+    # ФОТО И ВИДЕО
+    # ==============================================
+
+    # Копируем оригинальное медиа в канал
+
+    copied = await bot.copy_message(
         chat_id=CHANNEL_ID,
         from_chat_id=chat_id,
         message_id=message_id
     )
 
-    # Для текста берём оригинал из личного чата
+    # Сохраняем исходную подпись
     # и добавляем автора
 
-    # Текстовый пост
-    # Сначала копируем, затем редактируем текст
+    caption = html.escape(post_caption)
 
-    if original:
+    if caption:
 
-        # Получаем текст из сообщения пользователя
-        # через get_message невозможно, поэтому
-        # текст сохраняется при приёме заявки.
+        final_caption = (
+            f"{caption}\n\n"
+            f"👤: {author}"
+        )
 
-        # Медиа
-        try:
+    else:
 
-            await bot.edit_message_caption(
-                chat_id=CHANNEL_ID,
-                message_id=original.message_id,
-                caption=f"👤: {author}",
-                parse_mode=ParseMode.HTML
-            )
+        final_caption = f"👤: {author}"
 
-        except TelegramAPIError:
+    # Добавляем подпись к медиа
 
-            # Для текстового сообщения
-            # caption не подходит
-
-            await bot.delete_message(
-                chat_id=CHANNEL_ID,
-                message_id=original.message_id
-            )
-
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"👤: {author}",
-                parse_mode=ParseMode.HTML
-            )
+    await bot.edit_message_caption(
+        chat_id=CHANNEL_ID,
+        message_id=copied.message_id,
+        caption=final_caption,
+        parse_mode=ParseMode.HTML
+    )
 
 
 # ==================================================
@@ -462,7 +545,11 @@ async def accept_post(callback: CallbackQuery):
 
     try:
 
+        # Публикуем пост
+
         await publish_post(request)
+
+        # Меняем статус
 
         db.execute(
             """
@@ -475,6 +562,8 @@ async def accept_post(callback: CallbackQuery):
 
         db.commit()
 
+        # Убираем кнопки
+
         await callback.message.edit_reply_markup(
             reply_markup=None
         )
@@ -482,6 +571,8 @@ async def accept_post(callback: CallbackQuery):
         await callback.answer(
             "✅ Пост опубликован!"
         )
+
+        # Уведомляем автора
 
         await bot.send_message(
             request["user_id"],
@@ -548,12 +639,11 @@ async def reject_post(
         return
 
     await state.set_state(
-        SuggestionStates.waiting_reason
+        AdminStates.waiting_reason
     )
 
     await state.update_data(
-        request_id=request_id,
-        user_id=request["user_id"]
+        request_id=request_id
     )
 
     await callback.message.answer(
@@ -568,10 +658,10 @@ async def reject_post(
 
 
 # ==================================================
-# ОТПРАВКА ПРИЧИНЫ ОТКАЗА
+# ПРИЧИНА ОТКАЗА
 # ==================================================
 
-@dp.message(SuggestionStates.waiting_reason)
+@dp.message(AdminStates.waiting_reason)
 async def reject_reason(
     message: Message,
     state: FSMContext
@@ -594,8 +684,6 @@ async def reject_reason(
 
     request_id = data["request_id"]
 
-    user_id = data["user_id"]
-
     request = get_request(request_id)
 
     if not request or request["status"] != "pending":
@@ -611,7 +699,7 @@ async def reject_reason(
     try:
 
         await bot.send_message(
-            user_id,
+            request["user_id"],
             "❌ Твой пост отклонён.\n\n"
             f"Причина: {html.escape(reason)}",
             reply_markup=main_keyboard()
@@ -734,9 +822,13 @@ async def main():
 
     logging.info("Бот предложки запущен!")
 
+    # Автопинг в фоне
+
     asyncio.create_task(
         auto_ping()
     )
+
+    # Запуск Telegram-бота
 
     await dp.start_polling(bot)
 
