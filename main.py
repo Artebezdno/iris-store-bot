@@ -3,8 +3,8 @@ import logging
 import os
 import html
 import sqlite3
-import urllib.request
-import urllib.error
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -34,12 +34,6 @@ ADMIN_ID = 7837011810
 
 CHANNEL_ID = "@zapillspost"
 
-PING_URL = "https://iris-store-bot-eqkf.onrender.com/"
-
-PING_INTERVAL = 300
-RETRY_INTERVAL = 30
-PING_TIMEOUT = 20
-
 if not BOT_TOKEN:
     raise RuntimeError(
         "Не найден BOT_TOKEN. Добавь токен в Environment Render."
@@ -54,6 +48,30 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+# ==================================================
+# ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ БОТ НЕ ЗАСЫПАЛ)
+# ==================================================
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        # Отключаем лишние логи запросов сервера в консоли
+        pass
+
+def run_web_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), PingHandler)
+    logging.info(f"Веб-сервер запущен на порту {port}")
+    server.serve_forever()
+
+# Запускаем веб-сервер в отдельном потоке, чтобы он держал Render бодрым
+Thread(target=run_web_server, daemon=True).start()
 
 
 # ==================================================
@@ -74,7 +92,7 @@ dp = Dispatcher()
 # БАЗА ДАННЫХ
 # ==================================================
 
-db = sqlite3.connect("suggestions.db")
+db = sqlite3.connect("suggestions.db", check_same_thread=False)
 
 db.execute("""
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -341,7 +359,6 @@ async def receive_post(message: Message, state: FSMContext):
     db.commit()
 
     try:
-        # Пересылаем админу превью поста для удобной проверки
         if post_type == "text":
             await bot.send_message(
                 ADMIN_ID,
@@ -612,57 +629,11 @@ async def reject_reason(message: Message, state: FSMContext):
 
 
 # ==================================================
-# АВТОПИНГ RENDER
-# ==================================================
-
-def check_site():
-    request = urllib.request.Request(
-        PING_URL,
-        headers={
-            "User-Agent": "Render-Auto-Ping"
-        }
-    )
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=PING_TIMEOUT
-        ) as response:
-            return response.status
-    except urllib.error.HTTPError as error:
-        return error.code
-
-
-async def auto_ping():
-    logging.info("Автопинг запущен: %s", PING_URL)
-    while True:
-        try:
-            status = await asyncio.to_thread(check_site)
-            if status < 500:
-                logging.info("Сайт отвечает. HTTP %s", status)
-                await asyncio.sleep(PING_INTERVAL)
-            else:
-                logging.warning(
-                    "HTTP %s. Повтор через %s секунд.",
-                    status,
-                    RETRY_INTERVAL
-                )
-                await asyncio.sleep(RETRY_INTERVAL)
-        except Exception as error:
-            logging.warning(
-                "Сайт не отвечает: %s. Повтор через %s секунд.",
-                error,
-                RETRY_INTERVAL
-            )
-            await asyncio.sleep(RETRY_INTERVAL)
-
-
-# ==================================================
 # ЗАПУСК
 # ==================================================
 
 async def main():
-    logging.info("Бот предложки запущен!")
-    asyncio.create_task(auto_ping())
+    logging.info("Бот предложки успешно запущен и готов к работе!")
     await dp.start_polling(bot)
 
 
