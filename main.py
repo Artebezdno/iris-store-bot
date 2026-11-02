@@ -211,12 +211,11 @@ def support_admin_keyboard(user_id):
 # ==================================================
 
 def author_link(user_id, name, username=None):
+    # Отображаем имя из Telegram, а кликом открываем профиль по ID.
+    # tg:// ссылка не создаёт веб-предпросмотр/карточку.
     safe_name = html.escape(name)
-    if username:
-        # Если есть юзернейм, делаем скрытую ссылку на https://t.me/username с текстом имени[cite: 9]
-        return f'<a href="https://t.me/{username}">{safe_name}</a>'
-    # Если юзернейма нет, делаем скрытую ссылку по ID[cite: 4]
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
 
 
 # ==================================================
