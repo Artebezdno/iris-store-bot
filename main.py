@@ -132,6 +132,7 @@ class SupportStates(StatesGroup):
 class AdminStates(StatesGroup):
     waiting_reason = State()
     waiting_support_reply = State()
+    waiting_edit_text = State()
 
 
 # ==================================================
@@ -180,6 +181,12 @@ def admin_keyboard(request_id):
                     text="✅ Принять",
                     callback_data=f"accept:{request_id}"
                 ),
+                InlineKeyboardButton(
+                    text="✏️ Редактировать",
+                    callback_data=f"edit_prep:{request_id}"
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     text="❌ Отклонить",
                     callback_data=f"reject:{request_id}"
@@ -477,7 +484,6 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     is_anon = int(callback.data.split(":")[1])
     data = await state.get_data()
 
-    # Исправлено: берём ID исключительно из сохраненных данных FSM первоначального отправителя
     user_id = data["user_id"]
     author_name = data.get("author_name") or "Автор"
     username = data.get("username") or ""
@@ -664,6 +670,102 @@ async def accept_post(callback: CallbackQuery):
     except TelegramAPIError as error:
         logging.exception("Ошибка публикации: %s", error)
         await callback.answer("❌ Ошибка публикации. Проверь права бота в канале.", show_alert=True)
+
+
+# ==================================================
+# РЕДАКТИРОВАНИЕ ПОСТА АДМИНИСТРАТОРОМ
+# ==================================================
+
+@dp.callback_query(F.data.startswith("edit_prep:"))
+async def edit_post_prep(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+
+    request_id = int(callback.data.split(":")[1])
+    request = get_request(request_id)
+
+    if not request:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    if request["status"] != "pending":
+        await callback.answer("Заявка уже обработана.", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_edit_text)
+    await state.update_data(request_id=request_id)
+
+    await callback.message.answer(
+        f"✏️ Редактирование заявки №{request_id}\n\n"
+        "Отправь новый текст (или подпись для фото/видео) следующим сообщением:"
+    )
+    await callback.answer("Ожидаю новый текст.")
+
+
+@dp.message(AdminStates.waiting_edit_text)
+async def save_edited_post(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    new_text = message.text or message.caption
+    if not new_text:
+        await message.answer("❌ Отправь текст для замены обычным сообщением.")
+        return
+
+    data = await state.get_data()
+    request_id = data["request_id"]
+    request = get_request(request_id)
+
+    if not request or request["status"] != "pending":
+        await message.answer("Заявка уже обработана.")
+        await state.clear()
+        return
+
+    # Обновляем текст или подпись в базе данных в зависимости от типа поста
+    if request["post_type"] == "text":
+        db.execute(
+            "UPDATE suggestions SET post_text = ? WHERE id = ?",
+            (new_text, request_id)
+        )
+    else:
+        db.execute(
+            "UPDATE suggestions SET post_caption = ? WHERE id = ?",
+            (new_text, request_id)
+        )
+    db.commit()
+
+    # Получаем обновленный объект заявки
+    updated_request = get_request(request_id)
+
+    try:
+        # Публикуем отредактированный пост в канал
+        await publish_post(updated_request)
+
+        # Меняем статус в БД на accepted
+        db.execute(
+            "UPDATE suggestions SET status = 'accepted' WHERE id = ?",
+            (request_id,)
+        )
+        db.commit()
+
+        await message.answer(
+            f"✅ Заявка №{request_id} успешно отредактирована и опубликована в канал!",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        # Уведомляем автора
+        await bot.send_message(
+            updated_request["user_id"],
+            "✅ Твой пост (после редактирования администратором) опубликован в канале!\n\nСпасибо за предложку.",
+            reply_markup=main_keyboard()
+        )
+
+    except TelegramAPIError as error:
+        logging.exception("Ошибка публикации отредактированного поста: %s", error)
+        await message.answer("❌ Ошибка публикации. Проверь права бота в канале.")
+
+    await state.clear()
 
 
 # ==================================================
