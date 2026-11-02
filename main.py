@@ -51,7 +51,7 @@ logging.basicConfig(
 
 
 # ==================================================
-# ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ БОТ НЕ ЗАСЫПАЛ)
+# ВЕБ-СЕРВЕР ДЛЯ RENDER
 # ==================================================
 
 class PingHandler(BaseHTTPRequestHandler):
@@ -101,36 +101,15 @@ CREATE TABLE IF NOT EXISTS suggestions (
     post_text TEXT DEFAULT '',
     post_caption TEXT DEFAULT '',
     post_type TEXT DEFAULT 'text',
-    file_id TEXT DEFAULT ''
+    file_id TEXT DEFAULT '',
+    is_anon INTEGER DEFAULT 0
 )
 """)
 
-columns = [
-    row[1]
-    for row in db.execute(
-        "PRAGMA table_info(suggestions)"
-    ).fetchall()
-]
-
-if "post_text" not in columns:
-    db.execute(
-        "ALTER TABLE suggestions ADD COLUMN post_text TEXT DEFAULT ''"
-    )
-
-if "post_caption" not in columns:
-    db.execute(
-        "ALTER TABLE suggestions ADD COLUMN post_caption TEXT DEFAULT ''"
-    )
-
-if "post_type" not in columns:
-    db.execute(
-        "ALTER TABLE suggestions ADD COLUMN post_type TEXT DEFAULT 'text'"
-    )
-
-if "file_id" not in columns:
-    db.execute(
-        "ALTER TABLE suggestions ADD COLUMN file_id TEXT DEFAULT ''"
-    )
+# Проверяем колонку is_anon для старых баз
+columns = [row[1] for row in db.execute("PRAGMA table_info(suggestions)").fetchall()]
+if "is_anon" not in columns:
+    db.execute("ALTER TABLE suggestions ADD COLUMN is_anon INTEGER DEFAULT 0")
 
 db.commit()
 
@@ -141,6 +120,7 @@ db.commit()
 
 class SuggestionStates(StatesGroup):
     waiting_post = State()
+    waiting_anon_choice = State()
 
 
 class SupportStates(StatesGroup):
@@ -176,6 +156,17 @@ def cancel_keyboard():
             ]
         ],
         resize_keyboard=True
+    )
+
+
+def anon_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👤 С автором", callback_data="anon:0"),
+                InlineKeyboardButton(text="🕶 Анонимно", callback_data="anon:1")
+            ]
+        ]
     )
 
 
@@ -240,7 +231,8 @@ def get_request(request_id):
             post_text,
             post_caption,
             post_type,
-            file_id
+            file_id,
+            is_anon
         FROM suggestions
         WHERE id = ?
         """,
@@ -258,7 +250,8 @@ def get_request(request_id):
         "post_text": row[4] or "",
         "post_caption": row[5] or "",
         "post_type": row[6] or "text",
-        "file_id": row[7] or ""
+        "file_id": row[7] or "",
+        "is_anon": row[8] or 0
     }
 
 
@@ -274,8 +267,7 @@ async def start(message: Message, state: FSMContext):
         "Хочешь, чтобы другие люди узнали, "
         "как проходит твоя жизнь?\n\n"
         "Здесь можно поделиться историей, "
-        "фотографией, видео или просто написать, "
-        "что ты сейчас делаешь.\n\n"
+        "фотографией, видео, кружочком или просто написать сообщение.\n\n"
         "📩 Нажми «Предложить пост» или обратись в «Поддержку».",
         reply_markup=main_keyboard()
     )
@@ -292,8 +284,9 @@ async def suggest_post(message: Message, state: FSMContext):
         "📩 Отправь свой пост следующим сообщением.\n\n"
         "Можно отправить:\n"
         "📝 Текст\n"
-        "📸 Фото с подписью или без неё\n"
-        "🎥 Видео с подписью или без неё\n\n"
+        "📸 Фото с подписью или без\n"
+        "🎥 Видео с подписью или без\n"
+        "⭕️ Кружочек (видеосообщение)\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
@@ -308,7 +301,7 @@ async def support_start(message: Message, state: FSMContext):
     await state.set_state(SupportStates.waiting_message)
     await message.answer(
         "💬 Напиши свое сообщение для поддержки.\n\n"
-        "Можешь отправить текст, фото или видео с описанием вашего вопроса или проблемы.\n\n"
+        "Можешь отправить текст, фото, видео или кружочек с объяснением твоего вопроса.\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
@@ -351,8 +344,16 @@ async def receive_support_message(message: Message, state: FSMContext):
                 caption=f"💬 <b>Новое обращение в поддержку!</b>\n\n{user_info}\n\n📝 <b>Подпись:</b>\n{html.escape(caption)}",
                 reply_markup=support_admin_keyboard(user.id)
             )
+        elif message.video_note:
+            file_id = message.video_note.file_id
+            await bot.send_video_note(ADMIN_ID, video_note=file_id)
+            await bot.send_message(
+                ADMIN_ID,
+                f"💬 <b>Новое обращение в поддержку (кружочек)!</b>\n\n{user_info}",
+                reply_markup=support_admin_keyboard(user.id)
+            )
         else:
-            await message.answer("❌ Поддерживаются только текст, фото или видео.")
+            await message.answer("❌ Поддерживаются текст, фото, видео или кружочки.")
             return
 
         await message.answer(
@@ -413,7 +414,7 @@ async def send_support_reply(message: Message, state: FSMContext):
         await message.answer("✅ Ответ успешно отправлен пользователю!")
     except TelegramAPIError as error:
         logging.exception("Ошибка отправки ответа поддержки: %s", error)
-        await message.answer("❌ Не удалось доставить ответ пользователю (возможно, бот заблокирован).")
+        await message.answer("❌ Не удалось доставить ответ пользователю.")
 
     await state.clear()
 
@@ -432,7 +433,7 @@ async def cancel_suggestion(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ПОЛУЧЕНИЕ ПОСТА
+# ПОЛУЧЕНИЕ ПОСТА И ВЫБОР АНОНИМНОСТИ
 # ==================================================
 
 @dp.message(SuggestionStates.waiting_post)
@@ -452,18 +453,37 @@ async def receive_post(message: Message, state: FSMContext):
         post_type = "video"
         file_id = message.video.file_id
         post_caption = message.caption or ""
+    elif message.video_note:
+        post_type = "video_note"
+        file_id = message.video_note.file_id
     else:
         await message.answer(
-            "❌ Пожалуйста, отправь текст, фото или видео."
+            "❌ Пожалуйста, отправь текст, фото, видео или кружочек."
         )
         return
 
-    user = message.from_user
-    author_name = (
-        user.full_name
-        or user.username
-        or "Автор"
+    # Сохраняем временные данные во FSM, пока пользователь выбирает анонимность
+    await state.update_data(
+        post_type=post_type,
+        post_text=post_text,
+        post_caption=post_caption,
+        file_id=file_id
     )
+
+    await state.set_state(SuggestionStates.waiting_anon_choice)
+    await message.answer(
+        "🕶 Как подписать твой пост?",
+        reply_markup=anon_keyboard()
+    )
+
+
+@dp.callback_query(SuggestionStates.waiting_anon_choice, F.data.startswith("anon:"))
+async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
+    is_anon = int(callback.data.split(":")[1])
+    data = await state.get_data()
+
+    user = callback.from_user
+    author_name = user.full_name or user.username or "Автор"
 
     cursor = db.execute(
         """
@@ -474,68 +494,75 @@ async def receive_post(message: Message, state: FSMContext):
             post_text,
             post_caption,
             post_type,
-            file_id
+            file_id,
+            is_anon
         )
-        VALUES (?, ?, 'pending', ?, ?, ?, ?)
+        VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
         """,
         (
             user.id,
             author_name,
-            post_text,
-            post_caption,
-            post_type,
-            file_id
+            data["post_text"],
+            data["post_caption"],
+            data["post_type"],
+            data["file_id"],
+            is_anon
         )
     )
 
     request_id = cursor.lastrowid
     db.commit()
 
+    anon_status_text = "🕶 Анонимно" if is_anon else "👤 С автором"
+
     try:
-        if post_type == "text":
+        if data["post_type"] == "text":
             await bot.send_message(
                 ADMIN_ID,
-                f"📩 Новая заявка №{request_id}\n\n"
-                f"📝 Текст:\n{post_text}\n\n"
+                f"📩 Новая заявка №{request_id} ({anon_status_text})\n\n"
+                f"📝 Текст:\n{data['post_text']}\n\n"
                 f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)",
                 reply_markup=admin_keyboard(request_id)
             )
-        elif post_type == "photo":
+        elif data["post_type"] == "photo":
             await bot.send_photo(
                 ADMIN_ID,
-                photo=file_id,
-                caption=f"📩 Новая заявка №{request_id}\n"
+                photo=data["file_id"],
+                caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
                         f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)"
-                        f"{f'\n\nПодпись: {post_caption}' if post_caption else ''}",
+                        f"{f'\n\nПодпись: {data[\"post_caption\"]}' if data[\"post_caption\"] else ''}",
                 reply_markup=admin_keyboard(request_id)
             )
-        elif post_type == "video":
+        elif data["post_type"] == "video":
             await bot.send_video(
                 ADMIN_ID,
-                video=file_id,
-                caption=f"📩 Новая заявка №{request_id}\n"
+                video=data["file_id"],
+                caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
                         f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)"
-                        f"{f'\n\nПодпись: {post_caption}' if post_caption else ''}",
+                        f"{f'\n\nПодпись: {data[\"post_caption\"]}' if data[\"post_caption\"] else ''}",
+                reply_markup=admin_keyboard(request_id)
+            )
+        elif data["post_type"] == "video_note":
+            await bot.send_video_note(ADMIN_ID, video_note=data["file_id"])
+            await bot.send_message(
+                ADMIN_ID,
+                f"📩 Новая заявка (кружочек) №{request_id} ({anon_status_text})\n"
+                f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)",
                 reply_markup=admin_keyboard(request_id)
             )
 
-        await message.answer(
-            "✅ Твой пост отправлен администратору!\n\n"
-            "Ожидай решения.",
+        await callback.message.edit_text(
+            "✅ Твой пост отправлен администратору!\n\nОжидай решения."
+        )
+        await callback.message.answer(
+            "Главное меню:",
             reply_markup=main_keyboard()
         )
-
         await state.clear()
 
     except TelegramAPIError as error:
-        logging.exception(
-            "Ошибка отправки заявки: %s",
-            error
-        )
-        await message.answer(
-            "❌ Не удалось отправить заявку.\n"
-            "Попробуй ещё раз."
-        )
+        logging.exception("Ошибка отправки заявки: %s", error)
+        await callback.message.answer("❌ Не удалось отправить заявку. Попробуй ещё раз.")
 
 
 # ==================================================
@@ -549,15 +576,13 @@ async def publish_post(request):
     post_text = request["post_text"]
     post_caption = request["post_caption"]
     file_id = request["file_id"]
+    is_anon = request["is_anon"]
 
-    author = author_link(user_id, author_name)
+    author = author_link(user_id, author_name) if not is_anon else None
 
     if post_type == "text":
         text = html.escape(post_text)
-        final_text = (
-            f"{text}\n\n"
-            f"👤: {author}"
-        )
+        final_text = f"{text}\n\n👤: {author}" if author else text
         await bot.send_message(
             chat_id=CHANNEL_ID,
             text=final_text,
@@ -566,10 +591,14 @@ async def publish_post(request):
 
     elif post_type == "photo":
         caption = html.escape(post_caption)
-        if caption:
+        if caption and author:
             final_caption = f"{caption}\n\n👤: {author}"
-        else:
+        elif caption and not author:
+            final_caption = caption
+        elif not caption and author:
             final_caption = f"👤: {author}"
+        else:
+            final_caption = None
 
         await bot.send_photo(
             chat_id=CHANNEL_ID,
@@ -580,10 +609,14 @@ async def publish_post(request):
 
     elif post_type == "video":
         caption = html.escape(post_caption)
-        if caption:
+        if caption and author:
             final_caption = f"{caption}\n\n👤: {author}"
-        else:
+        elif caption and not author:
+            final_caption = caption
+        elif not caption and author:
             final_caption = f"👤: {author}"
+        else:
+            final_caption = None
 
         await bot.send_video(
             chat_id=CHANNEL_ID,
@@ -591,6 +624,18 @@ async def publish_post(request):
             caption=final_caption,
             parse_mode=ParseMode.HTML
         )
+
+    elif post_type == "video_note":
+        await bot.send_video_note(
+            chat_id=CHANNEL_ID,
+            video_note=file_id
+        )
+        if author:
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"👤: {author}",
+                parse_mode=ParseMode.HTML
+            )
 
 
 # ==================================================
@@ -600,27 +645,18 @@ async def publish_post(request):
 @dp.callback_query(F.data.startswith("accept:"))
 async def accept_post(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer(
-            "⛔ Нет доступа!",
-            show_alert=True
-        )
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
         return
 
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
     if not request:
-        await callback.answer(
-            "Заявка не найдена.",
-            show_alert=True
-        )
+        await callback.answer("Заявка не найдена.", show_alert=True)
         return
 
     if request["status"] != "pending":
-        await callback.answer(
-            "Заявка уже обработана.",
-            show_alert=True
-        )
+        await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
     try:
@@ -636,30 +672,18 @@ async def accept_post(callback: CallbackQuery):
         )
         db.commit()
 
-        await callback.message.edit_reply_markup(
-            reply_markup=None
-        )
-        await callback.answer(
-            "✅ Пост опубликован!"
-        )
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("✅ Пост опубликован!")
 
         await bot.send_message(
             request["user_id"],
-            "✅ Твой пост опубликован в канале!\n\n"
-            "Спасибо за предложку.",
+            "✅ Твой пост опубликован в канале!\n\nСпасибо за предложку.",
             reply_markup=main_keyboard()
         )
 
     except TelegramAPIError as error:
-        logging.exception(
-            "Ошибка публикации: %s",
-            error
-        )
-        await callback.answer(
-            "❌ Ошибка публикации. "
-            "Проверь права бота в канале.",
-            show_alert=True
-        )
+        logging.exception("Ошибка публикации: %s", error)
+        await callback.answer("❌ Ошибка публикации. Проверь права бота в канале.", show_alert=True)
 
 
 # ==================================================
@@ -669,27 +693,18 @@ async def accept_post(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("reject:"))
 async def reject_post(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer(
-            "⛔ Нет доступа!",
-            show_alert=True
-        )
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
         return
 
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
     if not request:
-        await callback.answer(
-            "Заявка не найдена.",
-            show_alert=True
-        )
+        await callback.answer("Заявка не найдена.", show_alert=True)
         return
 
     if request["status"] != "pending":
-        await callback.answer(
-            "Заявка уже обработана.",
-            show_alert=True
-        )
+        await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_reason)
@@ -750,13 +765,8 @@ async def reject_reason(message: Message, state: FSMContext):
         )
 
     except TelegramAPIError as error:
-        logging.exception(
-            "Ошибка отправки причины: %s",
-            error
-        )
-        await message.answer(
-            "❌ Не удалось отправить причину."
-        )
+        logging.exception("Ошибка отправки причины: %s", error)
+        await message.answer("❌ Не удалось отправить причину.")
 
     await state.clear()
 
