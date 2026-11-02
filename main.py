@@ -207,14 +207,14 @@ def support_admin_keyboard(user_id):
 
 
 # ==================================================
-# ССЫЛКА НА АВТОРА (ТОЛЬКО ЧИСТЫЙ ЮЗЕРНЕЙМ)
+# ССЫЛКА НА АВТОРА (ПО ИМЕНИ ПРОФИЛЯ)
 # ==================================================
 
-def author_link(name, username=None):
+def author_link(user_id, name, username=None):
     safe_name = html.escape(name)
     if username:
-        return f'<a href="https://t.me/{username}">@{username}</a>'
-    return safe_name
+        return f'<a href="https://t.me/{username}">{safe_name}</a>'
+    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
 # ==================================================
@@ -561,6 +561,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 # ==================================================
 
 async def publish_post(request):
+    user_id = request["user_id"]
     author_name = request["author_name"]
     username = request["username"]
     post_type = request["post_type"]
@@ -569,7 +570,7 @@ async def publish_post(request):
     file_id = request["file_id"]
     is_anon = request["is_anon"]
 
-    author = author_link(author_name, username) if not is_anon else None
+    author = author_link(user_id, author_name, username) if not is_anon else None
 
     if post_type == "text":
         text = html.escape(post_text)
