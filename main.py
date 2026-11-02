@@ -512,6 +512,8 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     db.commit()
 
     anon_status_text = "🕶 Анонимно" if is_anon else "👤 С автором"
+    p_caption = data.get("post_caption", "")
+    caption_line = f"\n\nПодпись: {p_caption}" if p_caption else ""
 
     try:
         if data["post_type"] == "text":
@@ -527,8 +529,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 ADMIN_ID,
                 photo=data["file_id"],
                 caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
-                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)"
-                        f"{f'\n\nПодпись: {data[\"post_caption\"]}' if data[\"post_caption\"] else ''}",
+                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>){caption_line}",
                 reply_markup=admin_keyboard(request_id)
             )
         elif data["post_type"] == "video":
@@ -536,8 +537,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 ADMIN_ID,
                 video=data["file_id"],
                 caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
-                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)"
-                        f"{f'\n\nПодпись: {data[\"post_caption\"]}' if data[\"post_caption\"] else ''}",
+                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>){caption_line}",
                 reply_markup=admin_keyboard(request_id)
             )
         elif data["post_type"] == "video_note":
