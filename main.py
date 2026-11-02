@@ -458,6 +458,7 @@ async def receive_post(message: Message, state: FSMContext):
     username = user.username or ""
 
     await state.update_data(
+        user_id=user.id,
         post_type=post_type,
         post_text=post_text,
         post_caption=post_caption,
@@ -479,6 +480,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     user = callback.from_user
+    user_id = data.get("user_id") or user.id
     author_name = data.get("author_name") or user.full_name or "Автор"
     username = data.get("username") or user.username or ""
 
@@ -498,7 +500,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
         """,
         (
-            user.id,
+            user_id,
             author_name,
             username,
             data["post_text"],
