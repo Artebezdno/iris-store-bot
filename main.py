@@ -266,7 +266,7 @@ async def start(message: Message, state: FSMContext):
         "Хочешь, чтобы другие люди узнали, "
         "как проходит твоя жизнь?\n\n"
         "Здесь можно поделиться историей, "
-        "фотографией, видео, кружочком или просто написать сообщение.\n\n"
+        "фотографией, видео или просто написать сообщение.\n\n"
         "📩 Нажми «Предложить пост» или обратись в «Поддержку».",
         reply_markup=main_keyboard()
     )
@@ -284,8 +284,7 @@ async def suggest_post(message: Message, state: FSMContext):
         "Можно отправить:\n"
         "📝 Текст\n"
         "📸 Фото с подписью или без\n"
-        "🎥 Видео с подписью или без\n"
-        "⭕️ Кружочек (видеосообщение)\n\n"
+        "🎥 Видео с подписью или без\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
@@ -300,7 +299,7 @@ async def support_start(message: Message, state: FSMContext):
     await state.set_state(SupportStates.waiting_message)
     await message.answer(
         "💬 Напиши свое сообщение для поддержки.\n\n"
-        "Можешь отправить текст, фото, видео или кружочек с объяснением твоего вопроса.\n\n"
+        "Можешь отправить текст, фото или видео с объяснением твоего вопроса.\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
@@ -343,16 +342,8 @@ async def receive_support_message(message: Message, state: FSMContext):
                 caption=f"💬 <b>Новое обращение в поддержку!</b>\n\n{user_info}\n\n📝 <b>Подпись:</b>\n{html.escape(caption)}",
                 reply_markup=support_admin_keyboard(user.id)
             )
-        elif message.video_note:
-            file_id = message.video_note.file_id
-            await bot.send_video_note(ADMIN_ID, video_note=file_id)
-            await bot.send_message(
-                ADMIN_ID,
-                f"💬 <b>Новое обращение в поддержку (кружочек)!</b>\n\n{user_info}",
-                reply_markup=support_admin_keyboard(user.id)
-            )
         else:
-            await message.answer("❌ Поддерживаются текст, фото, видео или кружочки.")
+            await message.answer("❌ Поддерживаются только текст, фото или видео.")
             return
 
         await message.answer(
@@ -452,12 +443,9 @@ async def receive_post(message: Message, state: FSMContext):
         post_type = "video"
         file_id = message.video.file_id
         post_caption = message.caption or ""
-    elif message.video_note:
-        post_type = "video_note"
-        file_id = message.video_note.file_id
     else:
         await message.answer(
-            "❌ Пожалуйста, отправь текст, фото, видео или кружочек."
+            "❌ Пожалуйста, отправь текст, фото или видео."
         )
         return
 
@@ -540,14 +528,6 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                         f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>){caption_line}",
                 reply_markup=admin_keyboard(request_id)
             )
-        elif data["post_type"] == "video_note":
-            await bot.send_video_note(ADMIN_ID, video_note=data["file_id"])
-            await bot.send_message(
-                ADMIN_ID,
-                f"📩 Новая заявка (кружочек) №{request_id} ({anon_status_text})\n"
-                f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)",
-                reply_markup=admin_keyboard(request_id)
-            )
 
         await callback.message.edit_text(
             "✅ Твой пост отправлен администратору!\n\nОжидай решения."
@@ -622,18 +602,6 @@ async def publish_post(request):
             caption=final_caption,
             parse_mode=ParseMode.HTML
         )
-
-    elif post_type == "video_note":
-        await bot.send_video_note(
-            chat_id=CHANNEL_ID,
-            video_note=file_id
-        )
-        if author:
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"👤: {author}",
-                parse_mode=ParseMode.HTML
-            )
 
 
 # ==================================================
