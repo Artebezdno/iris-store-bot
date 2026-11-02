@@ -87,38 +87,40 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# Блокировка для защиты файла пользователей от одновременной записи
 users_file_lock = asyncio.Lock()
 
 
 # ==================================================
-# БАЗА ДАННЫХ (СУЩЕСТВУЮЩАЯ suggestions.db)
+# БАЗА ДАННЫХ
 # ==================================================
 
-db = sqlite3.connect("suggestions.db", check_same_thread=False)
+def init_db():
+    conn = sqlite3.connect("suggestions.db", check_same_thread=False)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        author_name TEXT NOT NULL,
+        username TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        post_text TEXT DEFAULT '',
+        post_caption TEXT DEFAULT '',
+        post_type TEXT DEFAULT 'text',
+        file_id TEXT DEFAULT '',
+        is_anon INTEGER DEFAULT 0
+    )
+    """)
+    
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(suggestions)").fetchall()]
+    if "is_anon" not in columns:
+        conn.execute("ALTER TABLE suggestions ADD COLUMN is_anon INTEGER DEFAULT 0")
+    if "username" not in columns:
+        conn.execute("ALTER TABLE suggestions ADD COLUMN username TEXT DEFAULT ''")
+    
+    conn.commit()
+    return conn
 
-db.execute("""
-CREATE TABLE IF NOT EXISTS suggestions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    author_name TEXT NOT NULL,
-    username TEXT DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'pending',
-    post_text TEXT DEFAULT '',
-    post_caption TEXT DEFAULT '',
-    post_type TEXT DEFAULT 'text',
-    file_id TEXT DEFAULT '',
-    is_anon INTEGER DEFAULT 0
-)
-""")
-
-columns = [row[1] for row in db.execute("PRAGMA table_info(suggestions)").fetchall()]
-if "is_anon" not in columns:
-    db.execute("ALTER TABLE suggestions ADD COLUMN is_anon INTEGER DEFAULT 0")
-if "username" not in columns:
-    db.execute("ALTER TABLE suggestions ADD COLUMN username TEXT DEFAULT ''")
-
-db.commit()
+db = init_db()
 
 
 # ==================================================
@@ -126,7 +128,6 @@ db.commit()
 # ==================================================
 
 def ensure_users_file():
-    """Создаёт локальную папку data и файл users.json, если их нет."""
     dir_name = os.path.dirname(GITHUB_USERS_FILE)
     if dir_name and not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
@@ -136,7 +137,6 @@ def ensure_users_file():
 
 
 async def load_users() -> dict:
-    """Загружает и восстанавливает пользователей из JSON (исправление повреждений и дублей)."""
     async with users_file_lock:
         ensure_users_file()
         try:
@@ -181,18 +181,14 @@ async def load_users() -> dict:
 
 
 async def save_users(users_data: dict):
-    """Сохраняет пользователей в локальный JSON и сразу отправляет на GitHub."""
     async with users_file_lock:
         ensure_users_file()
         with open(GITHUB_USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(users_data, f, ensure_ascii=False, indent=4)
-    
-    # Сразу запускаем синхронизацию с GitHub в фоновом режиме
     asyncio.create_task(sync_users_to_github())
 
 
 async def register_user(user):
-    """Автоматическая регистрация/обновление пользователя."""
     if not user:
         return
     users = await load_users()
@@ -207,7 +203,6 @@ async def register_user(user):
 
 
 async def sync_users_to_github():
-    """Синхронизация users.json с GitHub репозиторием."""
     if not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
         return
 
@@ -253,7 +248,6 @@ async def sync_users_to_github():
 
 
 async def github_sync_background_loop():
-    """Фоновая задача синхронизации как страховка каждые 5 минут."""
     while True:
         await asyncio.sleep(300)
         await sync_users_to_github()
@@ -789,8 +783,13 @@ async def accept_post(callback: CallbackQuery):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request or request["status"] != "pending":
-        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
+    if not request:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("⚠️ Заявка не найдена в базе (возможно, сервер перезапускался).", show_alert=True)
+        return
+
+    if request["status"] != "pending":
+        await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
     try:
@@ -824,8 +823,13 @@ async def edit_post_prep(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request or request["status"] != "pending":
-        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
+    if not request:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("⚠️ Заявка не найдена в базе (возможно, сервер перезапускался).", show_alert=True)
+        return
+
+    if request["status"] != "pending":
+        await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_edit_text)
@@ -895,8 +899,13 @@ async def reject_post(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request or request["status"] != "pending":
-        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
+    if not request:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("⚠️ Заявка не найдена в базе (возможно, сервер перезапускался).", show_alert=True)
+        return
+
+    if request["status"] != "pending":
+        await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_reason)
