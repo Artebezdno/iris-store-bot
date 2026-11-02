@@ -209,10 +209,7 @@ def support_admin_keyboard(user_id):
 
 def author_link(user_id, name):
     safe_name = html.escape(name)
-    return (
-        f'<a href="tg://user?id={user_id}">'
-        f'{safe_name}</a>'
-    )
+    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
 # ==================================================
@@ -449,11 +446,16 @@ async def receive_post(message: Message, state: FSMContext):
         )
         return
 
+    user = message.from_user
+    author_name = user.full_name or user.username or "Автор"
+
+    # Сохраняем имя автора и данные во FSM
     await state.update_data(
         post_type=post_type,
         post_text=post_text,
         post_caption=post_caption,
-        file_id=file_id
+        file_id=file_id,
+        author_name=author_name
     )
 
     await state.set_state(SuggestionStates.waiting_anon_choice)
@@ -469,7 +471,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     user = callback.from_user
-    author_name = user.full_name or user.username or "Автор"
+    author_name = data.get("author_name") or user.full_name or "Автор"
 
     cursor = db.execute(
         """
@@ -556,6 +558,7 @@ async def publish_post(request):
     file_id = request["file_id"]
     is_anon = request["is_anon"]
 
+    # Форматируем ссылку на профиль автора через tg://user?id=
     author = author_link(user_id, author_name) if not is_anon else None
 
     if post_type == "text":
