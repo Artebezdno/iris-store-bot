@@ -106,7 +106,6 @@ CREATE TABLE IF NOT EXISTS suggestions (
 )
 """)
 
-# Проверяем колонку is_anon для старых баз
 columns = [row[1] for row in db.execute("PRAGMA table_info(suggestions)").fetchall()]
 if "is_anon" not in columns:
     db.execute("ALTER TABLE suggestions ADD COLUMN is_anon INTEGER DEFAULT 0")
@@ -462,7 +461,6 @@ async def receive_post(message: Message, state: FSMContext):
         )
         return
 
-    # Сохраняем временные данные во FSM, пока пользователь выбирает анонимность
     await state.update_data(
         post_type=post_type,
         post_text=post_text,
