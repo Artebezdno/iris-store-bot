@@ -207,12 +207,10 @@ def support_admin_keyboard(user_id):
 
 
 # ==================================================
-# ССЫЛКА НА АВТОРА (ТЕКСТ — ИМЯ, ССЫЛКА ВНУТРИ — НА ПРОФИЛЬ)[cite: 9]
+# ССЫЛКА НА АВТОРА (ТЕКСТ — ИМЯ, ССЫЛКА ВНУТРИ — НА ПРОФИЛЬ)
 # ==================================================
 
 def author_link(user_id, name, username=None):
-    # Отображаем имя автора, но ведём прямо в профиль Telegram по user_id.
-    # Не используем https://t.me/username, чтобы не создавать предпросмотр ссылки.
     safe_name = html.escape(name)
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
@@ -479,10 +477,10 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     is_anon = int(callback.data.split(":")[1])
     data = await state.get_data()
 
-    user = callback.from_user
-    user_id = data.get("user_id") or user.id
-    author_name = data.get("author_name") or user.full_name or "Автор"
-    username = data.get("username") or user.username or ""
+    # Исправлено: берём ID исключительно из сохраненных данных FSM первоначального отправителя
+    user_id = data["user_id"]
+    author_name = data.get("author_name") or "Автор"
+    username = data.get("username") or ""
 
     cursor = db.execute(
         """
@@ -524,7 +522,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 ADMIN_ID,
                 f"📩 Новая заявка №{request_id} ({anon_status_text})\n\n"
                 f"📝 Текст:\n{data['post_text']}\n\n"
-                f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>)",
+                f"👤 Автор: {html.escape(author_name)} (<code>{user_id}</code>)",
                 reply_markup=admin_keyboard(request_id)
             )
         elif data["post_type"] == "photo":
@@ -532,7 +530,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 ADMIN_ID,
                 photo=data["file_id"],
                 caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
-                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>){caption_line}",
+                        f"👤 Автор: {html.escape(author_name)} (<code>{user_id}</code>){caption_line}",
                 reply_markup=admin_keyboard(request_id)
             )
         elif data["post_type"] == "video":
@@ -540,7 +538,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 ADMIN_ID,
                 video=data["file_id"],
                 caption=f"📩 Новая заявка №{request_id} ({anon_status_text})\n"
-                        f"👤 Автор: {html.escape(author_name)} (<code>{user.id}</code>){caption_line}",
+                        f"👤 Автор: {html.escape(author_name)} (<code>{user_id}</code>){caption_line}",
                 reply_markup=admin_keyboard(request_id)
             )
 
