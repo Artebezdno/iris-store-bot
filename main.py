@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     author_name TEXT NOT NULL,
+    username TEXT DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending',
     post_text TEXT DEFAULT '',
     post_caption TEXT DEFAULT '',
@@ -109,6 +110,8 @@ CREATE TABLE IF NOT EXISTS suggestions (
 columns = [row[1] for row in db.execute("PRAGMA table_info(suggestions)").fetchall()]
 if "is_anon" not in columns:
     db.execute("ALTER TABLE suggestions ADD COLUMN is_anon INTEGER DEFAULT 0")
+if "username" not in columns:
+    db.execute("ALTER TABLE suggestions ADD COLUMN username TEXT DEFAULT ''")
 
 db.commit()
 
@@ -207,8 +210,10 @@ def support_admin_keyboard(user_id):
 # ССЫЛКА НА АВТОРА
 # ==================================================
 
-def author_link(user_id, name):
+def author_link(user_id, name, username=None):
     safe_name = html.escape(name)
+    if username:
+        return f'<a href="https://t.me/{username}">{safe_name}</a>'
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
@@ -223,6 +228,7 @@ def get_request(request_id):
             id,
             user_id,
             author_name,
+            username,
             status,
             post_text,
             post_caption,
@@ -242,12 +248,13 @@ def get_request(request_id):
         "id": row[0],
         "user_id": row[1],
         "author_name": row[2],
-        "status": row[3],
-        "post_text": row[4] or "",
-        "post_caption": row[5] or "",
-        "post_type": row[6] or "text",
-        "file_id": row[7] or "",
-        "is_anon": row[8] or 0
+        "username": row[3] or "",
+        "status": row[4],
+        "post_text": row[5] or "",
+        "post_caption": row[6] or "",
+        "post_type": row[7] or "text",
+        "file_id": row[8] or "",
+        "is_anon": row[9] or 0
     }
 
 
@@ -448,14 +455,15 @@ async def receive_post(message: Message, state: FSMContext):
 
     user = message.from_user
     author_name = user.full_name or user.username or "Автор"
+    username = user.username or ""
 
-    # Сохраняем имя автора и данные во FSM
     await state.update_data(
         post_type=post_type,
         post_text=post_text,
         post_caption=post_caption,
         file_id=file_id,
-        author_name=author_name
+        author_name=author_name,
+        username=username
     )
 
     await state.set_state(SuggestionStates.waiting_anon_choice)
@@ -472,12 +480,14 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
     user = callback.from_user
     author_name = data.get("author_name") or user.full_name or "Автор"
+    username = data.get("username") or user.username or ""
 
     cursor = db.execute(
         """
         INSERT INTO suggestions (
             user_id,
             author_name,
+            username,
             status,
             post_text,
             post_caption,
@@ -485,11 +495,12 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
             file_id,
             is_anon
         )
-        VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
         """,
         (
             user.id,
             author_name,
+            username,
             data["post_text"],
             data["post_caption"],
             data["post_type"],
@@ -552,14 +563,14 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 async def publish_post(request):
     user_id = request["user_id"]
     author_name = request["author_name"]
+    username = request["username"]
     post_type = request["post_type"]
     post_text = request["post_text"]
     post_caption = request["post_caption"]
     file_id = request["file_id"]
     is_anon = request["is_anon"]
 
-    # Форматируем ссылку на профиль автора через tg://user?id=
-    author = author_link(user_id, author_name) if not is_anon else None
+    author = author_link(user_id, author_name, username) if not is_anon else None
 
     if post_type == "text":
         text = html.escape(post_text)
