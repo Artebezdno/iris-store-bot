@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import logging
 import os
 import html
@@ -6,6 +8,7 @@ import sqlite3
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
+import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -21,7 +24,7 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardRemove,
 )
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 
 
 # ==================================================
@@ -29,15 +32,17 @@ from aiogram.exceptions import TelegramAPIError
 # ==================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-
 ADMIN_ID = 7837011810
-
 CHANNEL_ID = "@zapillspost"
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_OWNER = os.getenv("GITHUB_OWNER", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
+GITHUB_USERS_FILE = os.getenv("GITHUB_USERS_FILE", "data/users.json").strip()
+
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "Не найден BOT_TOKEN. Добавь токен в Environment Render."
-    )
+    raise RuntimeError("Не найден BOT_TOKEN. Добавь токен в Environment Render.")
 
 
 # ==================================================
@@ -73,21 +78,21 @@ Thread(target=run_web_server, daemon=True).start()
 
 
 # ==================================================
-# БОТ
+# БОТ И ДИСПЕТЧЕР
 # ==================================================
 
 bot = Bot(
     token=BOT_TOKEN,
-    default=DefaultBotProperties(
-        parse_mode=ParseMode.HTML
-    )
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-
 dp = Dispatcher()
+
+# Блокировка для защиты файла пользователей от одновременной записи
+users_file_lock = asyncio.Lock()
 
 
 # ==================================================
-# БАЗА ДАННЫХ
+# БАЗА ДАННЫХ (СУЩЕСТВУЮЩАЯ suggestions.db)
 # ==================================================
 
 db = sqlite3.connect("suggestions.db", check_same_thread=False)
@@ -117,7 +122,143 @@ db.commit()
 
 
 # ==================================================
-# СОСТОЯНИЯ
+# РАБОТА С ПОЛЬЗОВАТЕЛЯМИ И GITHUB
+# ==================================================
+
+def ensure_users_file():
+    """Создаёт локальную папку data и файл users.json, если их нет."""
+    dir_name = os.path.dirname(GITHUB_USERS_FILE)
+    if dir_name and not os.path.exists(dir_name):
+        os.makedirs(dir_name, exist_ok=True)
+    if not os.path.exists(GITHUB_USERS_FILE):
+        with open(GITHUB_USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, ensure_ascii=False, indent=4)
+
+
+async def load_users() -> dict:
+    """Загружает и восстанавливает пользователей из JSON (исправление повреждений и дублей)."""
+    async with users_file_lock:
+        ensure_users_file()
+        try:
+            with open(GITHUB_USERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, Exception) as e:
+            logging.warning(f"Файл users.json поврежден ({e}), восстанавливаем...")
+            data = {}
+
+        cleaned_users = {}
+        if isinstance(data, dict):
+            for k, v in data.items():
+                try:
+                    user_id_int = int(k)
+                    if isinstance(v, dict):
+                        cleaned_users[str(user_id_int)] = {
+                            "user_id": user_id_int,
+                            "username": str(v.get("username", "")),
+                            "full_name": str(v.get("full_name", "")),
+                            "status": str(v.get("status", "active"))
+                        }
+                except ValueError:
+                    continue
+            return cleaned_users
+
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "user_id" in item:
+                    try:
+                        uid = int(item["user_id"])
+                        cleaned_users[str(uid)] = {
+                            "user_id": uid,
+                            "username": str(item.get("username", "")),
+                            "full_name": str(item.get("full_name", "")),
+                            "status": str(item.get("status", "active"))
+                        }
+                    except ValueError:
+                        continue
+            return cleaned_users
+
+        return {}
+
+
+async def save_users(users_data: dict):
+    """Сохраняет пользователей в локальный JSON."""
+    async with users_file_lock:
+        ensure_users_file()
+        with open(GITHUB_USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users_data, f, ensure_ascii=False, indent=4)
+
+
+async def register_user(user):
+    """Автоматическая регистрация/обновление пользователя."""
+    if not user:
+        return
+    users = await load_users()
+    uid_str = str(user.id)
+    users[uid_str] = {
+        "user_id": user.id,
+        "username": user.username or "",
+        "full_name": user.full_name or "",
+        "status": "active"
+    }
+    await save_users(users)
+
+
+async def sync_users_to_github():
+    """Синхронизация users.json с GitHub репозиторием."""
+    if not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
+        return
+
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_USERS_FILE}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    async with users_file_lock:
+        ensure_users_file()
+        if not os.path.exists(GITHUB_USERS_FILE):
+            return
+        with open(GITHUB_USERS_FILE, "rb") as f:
+            content_bytes = f.read()
+
+    encoded_content = base64.b64encode(content_bytes).decode("utf-8")
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Получаем SHA текущего файла на удаленном репозитории
+            sha = None
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    res_json = await resp.json()
+                    sha = res_json.get("sha")
+
+            payload = {
+                "message": "Auto-sync users.json",
+                "content": encoded_content,
+                "branch": GITHUB_BRANCH
+            }
+            if sha:
+                payload["sha"] = sha
+
+            async with session.put(url, headers=headers, json=payload) as resp:
+                if resp.status in (200, 201):
+                    logging.info("users.json успешно синхронизирован с GitHub.")
+                else:
+                    err_text = await resp.text()
+                    logging.error(f"Ошибка синхронизации с GitHub: {resp.status} - {err_text}")
+        except Exception as e:
+            logging.exception(f"Исключение при синхронизации с GitHub: {e}")
+
+
+async def github_sync_background_loop():
+    """Фоновая задача синхронизации каждые 5 минут."""
+    while True:
+        await asyncio.sleep(300)
+        await sync_users_to_github()
+
+
+# ==================================================
+# СОСТОЯНИЯ (FSM)
 # ==================================================
 
 class SuggestionStates(StatesGroup):
@@ -133,31 +274,28 @@ class AdminStates(StatesGroup):
     waiting_reason = State()
     waiting_support_reply = State()
     waiting_edit_text = State()
+    waiting_broadcast_message = State()
 
 
 # ==================================================
 # КЛАВИАТУРЫ
 # ==================================================
 
-def main_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="📩 Предложить пост"),
-                KeyboardButton(text="💬 Поддержка")
-            ]
-        ],
-        resize_keyboard=True
-    )
+def main_keyboard(is_admin: bool = False):
+    keyboard = [
+        [
+            KeyboardButton(text="📩 Предложить пост"),
+            KeyboardButton(text="💬 Поддержка")
+        ]
+    ]
+    if is_admin:
+        keyboard.append([KeyboardButton(text="📢 Рассылка")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def cancel_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="❌ Отмена")
-            ]
-        ],
+        keyboard=[[KeyboardButton(text="❌ Отмена")]],
         resize_keyboard=True
     )
 
@@ -177,20 +315,11 @@ def admin_keyboard(request_id):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="✅ Принять",
-                    callback_data=f"accept:{request_id}"
-                ),
-                InlineKeyboardButton(
-                    text="✏️ Редактировать",
-                    callback_data=f"edit_prep:{request_id}"
-                )
+                InlineKeyboardButton(text="✅ Принять", callback_data=f"accept:{request_id}"),
+                InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_prep:{request_id}")
             ],
             [
-                InlineKeyboardButton(
-                    text="❌ Отклонить",
-                    callback_data=f"reject:{request_id}"
-                )
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{request_id}")
             ]
         ]
     )
@@ -200,21 +329,26 @@ def support_admin_keyboard(user_id):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="💬 Ответить",
-                    callback_data=f"support_reply:{user_id}"
-                ),
-                InlineKeyboardButton(
-                    text="✅ Прочитано",
-                    callback_data="support_read"
-                )
+                InlineKeyboardButton(text="💬 Ответить", callback_data=f"support_reply:{user_id}"),
+                InlineKeyboardButton(text="✅ Прочитано", callback_data="support_read")
+            ]
+        ]
+    )
+
+
+def broadcast_confirm_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить рассылку", callback_data="broadcast_confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")
             ]
         ]
     )
 
 
 # ==================================================
-# ССЫЛКА НА АВТОРА (ТЕКСТ — ИМЯ, ССЫЛКА ВНУТРИ — НА ПРОФИЛЬ)
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==================================================
 
 def author_link(user_id, name, username=None):
@@ -222,24 +356,10 @@ def author_link(user_id, name, username=None):
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
-# ==================================================
-# ПОЛУЧЕНИЕ ЗАЯВКИ
-# ==================================================
-
 def get_request(request_id):
     row = db.execute(
         """
-        SELECT
-            id,
-            user_id,
-            author_name,
-            username,
-            status,
-            post_text,
-            post_caption,
-            post_type,
-            file_id,
-            is_anon
+        SELECT id, user_id, author_name, username, status, post_text, post_caption, post_type, file_id, is_anon
         FROM suggestions
         WHERE id = ?
         """,
@@ -264,51 +384,136 @@ def get_request(request_id):
 
 
 # ==================================================
-# ПРИВЕТСТВИЕ
+# СТАРТ И РЕГИСТРАЦИЯ
 # ==================================================
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
+    await register_user(message.from_user)
+    is_admin = (message.from_user.id == ADMIN_ID)
     await message.answer(
         "👋 Привет!\n\n"
-        "Хочешь, чтобы другие люди узнали, "
-        "как проходит твоя жизнь?\n\n"
-        "Здесь можно поделиться историей, "
-        "фотографией, видео или просто написать сообщение.\n\n"
+        "Хочешь, чтобы другие люди узнали, как проходит твоя жизнь?\n\n"
+        "Здесь можно поделиться историей, фотографией, видео или просто написать сообщение.\n\n"
         "📩 Нажми «Предложить пост» или обратись в «Поддержку».",
-        reply_markup=main_keyboard()
+        reply_markup=main_keyboard(is_admin)
     )
 
 
 # ==================================================
-# НАЧАЛО ПРЕДЛОЖКИ
+# РАССЫЛКА ДЛЯ АДМИНА
+# ==================================================
+
+@dp.message(F.text == "📢 Рассылка")
+async def broadcast_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_broadcast_message)
+    await message.answer(
+        "📢 Отправьте сообщение для рассылки всем пользователям.\n"
+        "Это может быть текст, фото, видео или любой другой контент.",
+        reply_markup=cancel_keyboard()
+    )
+
+
+@dp.message(AdminStates.waiting_broadcast_message)
+async def broadcast_preview(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена.", reply_markup=main_keyboard(True))
+        return
+
+    await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
+    await message.answer("👇 Вы хотите запустить рассылку этого сообщения всем пользователям?", reply_markup=broadcast_confirm_keyboard())
+
+
+@dp.callback_query(F.data == "broadcast_cancel")
+async def broadcast_cancel_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await callback.message.edit_text("❌ Рассылка отменена.")
+    await callback.message.answer("Главное меню:", reply_markup=main_keyboard(True))
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "broadcast_confirm")
+async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+
+    data = await state.get_data()
+    msg_id = data.get("broadcast_message_id")
+    from_chat_id = data.get("broadcast_chat_id")
+
+    await callback.message.edit_text("🚀 Рассылка запущена... Пожалуйста, подождите.")
+    await state.clear()
+
+    users = await load_users()
+    delivered = 0
+    failed = 0
+
+    for uid_str, user_info in users.items():
+        if user_info.get("status") == "blocked":
+            continue
+        target_id = user_info["user_id"]
+        try:
+            await bot.copy_message(chat_id=target_id, from_chat_id=from_chat_id, message_id=msg_id)
+            delivered += 1
+            await asyncio.sleep(0.05) # Небольшая задержка против флуд-контроля Telegram
+        except TelegramForbiddenError:
+            # Пользователь заблокировал бота
+            user_info["status"] = "blocked"
+            failed += 1
+        except TelegramAPIError:
+            failed += 1
+        except Exception:
+            failed += 1
+
+    # Сохраняем обновленные статусы пользователей (заблокированные)
+    await save_users(users)
+
+    await bot.send_message(
+        ADMIN_ID,
+        f"📊 <b>Рассылка завершена!</b>\n\n"
+        f"✅ Доставлено: <b>{delivered}</b>\n"
+        f"❌ Ошибок / заблокировали: <b>{failed}</b>",
+        reply_markup=main_keyboard(True)
+    )
+    await callback.answer()
+
+
+# ==================================================
+# ПРЕДЛОЖКА ПОСТОВ
 # ==================================================
 
 @dp.message(F.text == "📩 Предложить пост")
 async def suggest_post(message: Message, state: FSMContext):
+    await register_user(message.from_user)
     await state.set_state(SuggestionStates.waiting_post)
     await message.answer(
         "📩 Отправь свой пост следующим сообщением.\n\n"
-        "Можно отправить:\n"
-        "📝 Текст\n"
-        "📸 Фото с подписью или без\n"
-        "🎥 Видео с подписью или без\n\n"
+        "Можно отправить:\n📝 Текст\n📸 Фото с подписью или без\n🎥 Видео с подписью или без\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
 
 
 # ==================================================
-# ПОДДЕРЖКА — ПОЛЬЗОВАТЕЛЬ
+# ПОДДЕРЖКА
 # ==================================================
 
 @dp.message(F.text == "💬 Поддержка")
 async def support_start(message: Message, state: FSMContext):
+    await register_user(message.from_user)
     await state.set_state(SupportStates.waiting_message)
     await message.answer(
         "💬 Напиши свое сообщение для поддержки.\n\n"
-        "Можешь отправить текст, фото или видео с объяснением твоего вопроса.\n\n"
+        "Можешь отправить текст, фото или видео.\n\n"
         "Если передумал, нажми «❌ Отмена».",
         reply_markup=cancel_keyboard()
     )
@@ -318,7 +523,8 @@ async def support_start(message: Message, state: FSMContext):
 async def receive_support_message(message: Message, state: FSMContext):
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Запрос в поддержку отменён.", reply_markup=main_keyboard())
+        is_admin = (message.from_user.id == ADMIN_ID)
+        await message.answer("❌ Запрос в поддержку отменён.", reply_markup=main_keyboard(is_admin))
         return
 
     user = message.from_user
@@ -326,6 +532,7 @@ async def receive_support_message(message: Message, state: FSMContext):
     author_name = html.escape(user.full_name or "Пользователь")
     user_info = f"👤 Пользователь: {author_name}\n🔗 Юзернейм: {username}\n🆔 ID: <code>{user.id}</code>"
 
+    is_admin = (user.id == ADMIN_ID)
     try:
         if message.text:
             await bot.send_message(
@@ -357,7 +564,7 @@ async def receive_support_message(message: Message, state: FSMContext):
 
         await message.answer(
             "✅ Ваше сообщение отправлено в поддержку!\nОжидайте ответа администратора.",
-            reply_markup=main_keyboard()
+            reply_markup=main_keyboard(is_admin)
         )
         await state.clear()
 
@@ -365,10 +572,6 @@ async def receive_support_message(message: Message, state: FSMContext):
         logging.exception("Ошибка при отправке в поддержку: %s", error)
         await message.answer("❌ Не удалось отправить сообщение. Попробуйте позже.")
 
-
-# ==================================================
-# ПОДДЕРЖКА — АДМИН
-# ==================================================
 
 @dp.callback_query(F.data == "support_read")
 async def support_read_callback(callback: CallbackQuery):
@@ -386,9 +589,7 @@ async def support_reply_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_support_reply)
     await state.update_data(target_user_id=target_user_id)
 
-    await callback.message.answer(
-        f"✍️ Напиши текст ответа для пользователя (ID: <code>{target_user_id}</code>):"
-    )
+    await callback.message.answer(f"✍️ Напиши текст ответа для пользователя (ID: <code>{target_user_id}</code>):")
     await callback.answer()
 
 
@@ -419,20 +620,18 @@ async def send_support_reply(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ОТМЕНА ОБЩАЯ
+# ОБЩАЯ ОТМЕНА
 # ==================================================
 
 @dp.message(F.text == "❌ Отмена")
 async def cancel_suggestion(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(
-        "❌ Действие отменено.",
-        reply_markup=main_keyboard()
-    )
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer("❌ Действие отменено.", reply_markup=main_keyboard(is_admin))
 
 
 # ==================================================
-# ПОЛУЧЕНИЕ ПОСТА И ВЫБОР АНОНИМНОСТИ
+# ОБРАБОТКА ПОСТА И АНОНИМНОСТИ
 # ==================================================
 
 @dp.message(SuggestionStates.waiting_post)
@@ -453,9 +652,7 @@ async def receive_post(message: Message, state: FSMContext):
         file_id = message.video.file_id
         post_caption = message.caption or ""
     else:
-        await message.answer(
-            "❌ Пожалуйста, отправь текст, фото или видео."
-        )
+        await message.answer("❌ Пожалуйста, отправь текст, фото или видео.")
         return
 
     user = message.from_user
@@ -473,10 +670,7 @@ async def receive_post(message: Message, state: FSMContext):
     )
 
     await state.set_state(SuggestionStates.waiting_anon_choice)
-    await message.answer(
-        "🕶 Как подписать твой пост?",
-        reply_markup=anon_keyboard()
-    )
+    await message.answer("🕶 Как подписать твой пост?", reply_markup=anon_keyboard())
 
 
 @dp.callback_query(SuggestionStates.waiting_anon_choice, F.data.startswith("anon:"))
@@ -490,29 +684,10 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
     cursor = db.execute(
         """
-        INSERT INTO suggestions (
-            user_id,
-            author_name,
-            username,
-            status,
-            post_text,
-            post_caption,
-            post_type,
-            file_id,
-            is_anon
-        )
+        INSERT INTO suggestions (user_id, author_name, username, status, post_text, post_caption, post_type, file_id, is_anon)
         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
         """,
-        (
-            user_id,
-            author_name,
-            username,
-            data["post_text"],
-            data["post_caption"],
-            data["post_type"],
-            data["file_id"],
-            is_anon
-        )
+        (user_id, author_name, username, data["post_text"], data["post_caption"], data["post_type"], data["file_id"], is_anon)
     )
 
     request_id = cursor.lastrowid
@@ -548,13 +723,8 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
                 reply_markup=admin_keyboard(request_id)
             )
 
-        await callback.message.edit_text(
-            "✅ Твой пост отправлен администратору!\n\nОжидай решения."
-        )
-        await callback.message.answer(
-            "Главное меню:",
-            reply_markup=main_keyboard()
-        )
+        await callback.message.edit_text("✅ Твой пост отправлен администратору!\n\nОжидай решения.")
+        await callback.message.answer("Главное меню:", reply_markup=main_keyboard(False))
         await state.clear()
 
     except TelegramAPIError as error:
@@ -563,7 +733,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПУБЛИКАЦИЯ ПОСТА В КАНАЛ
+# ПУБЛИКАЦИЯ В КАНАЛ
 # ==================================================
 
 async def publish_post(request):
@@ -581,11 +751,7 @@ async def publish_post(request):
     if post_type == "text":
         text = html.escape(post_text)
         final_text = f"{text}\n\n👤: {author}" if author else text
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=final_text,
-            parse_mode=ParseMode.HTML
-        )
+        await bot.send_message(chat_id=CHANNEL_ID, text=final_text, parse_mode=ParseMode.HTML)
 
     elif post_type == "photo":
         caption = html.escape(post_caption)
@@ -598,12 +764,7 @@ async def publish_post(request):
         else:
             final_caption = None
 
-        await bot.send_photo(
-            chat_id=CHANNEL_ID,
-            photo=file_id,
-            caption=final_caption,
-            parse_mode=ParseMode.HTML
-        )
+        await bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=final_caption, parse_mode=ParseMode.HTML)
 
     elif post_type == "video":
         caption = html.escape(post_caption)
@@ -616,17 +777,8 @@ async def publish_post(request):
         else:
             final_caption = None
 
-        await bot.send_video(
-            chat_id=CHANNEL_ID,
-            video=file_id,
-            caption=final_caption,
-            parse_mode=ParseMode.HTML
-        )
+        await bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=final_caption, parse_mode=ParseMode.HTML)
 
-
-# ==================================================
-# ПРИНЯТИЕ ЗАЯВКИ
-# ==================================================
 
 @dp.callback_query(F.data.startswith("accept:"))
 async def accept_post(callback: CallbackQuery):
@@ -637,25 +789,13 @@ async def accept_post(callback: CallbackQuery):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request:
-        await callback.answer("Заявка не найдена.", show_alert=True)
-        return
-
-    if request["status"] != "pending":
-        await callback.answer("Заявка уже обработана.", show_alert=True)
+    if not request or request["status"] != "pending":
+        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
         return
 
     try:
         await publish_post(request)
-
-        db.execute(
-            """
-            UPDATE suggestions
-            SET status = 'accepted'
-            WHERE id = ?
-            """,
-            (request_id,)
-        )
+        db.execute("UPDATE suggestions SET status = 'accepted' WHERE id = ?", (request_id,))
         db.commit()
 
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -664,16 +804,15 @@ async def accept_post(callback: CallbackQuery):
         await bot.send_message(
             request["user_id"],
             "✅ Твой пост опубликован в канале!\n\nСпасибо за предложку.",
-            reply_markup=main_keyboard()
+            reply_markup=main_keyboard(False)
         )
-
     except TelegramAPIError as error:
         logging.exception("Ошибка публикации: %s", error)
         await callback.answer("❌ Ошибка публикации. Проверь права бота в канале.", show_alert=True)
 
 
 # ==================================================
-# РЕДАКТИРОВАНИЕ ПОСТА АДМИНИСТРАТОРОМ
+# РЕДАКТИРОВАНИЕ ПОСТА АДМИНОМ
 # ==================================================
 
 @dp.callback_query(F.data.startswith("edit_prep:"))
@@ -685,20 +824,15 @@ async def edit_post_prep(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request:
-        await callback.answer("Заявка не найдена.", show_alert=True)
-        return
-
-    if request["status"] != "pending":
-        await callback.answer("Заявка уже обработана.", show_alert=True)
+    if not request or request["status"] != "pending":
+        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_edit_text)
     await state.update_data(request_id=request_id)
 
     await callback.message.answer(
-        f"✏️ Редактирование заявки №{request_id}\n\n"
-        "Отправь новый текст (или подпись для фото/видео) следующим сообщением:"
+        f"✏️ Редактирование заявки №{request_id}\n\nОтправь новый текст (или подпись) следующим сообщением:"
     )
     await callback.answer("Ожидаю новый текст.")
 
@@ -722,45 +856,25 @@ async def save_edited_post(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Обновляем текст или подпись в базе данных в зависимости от типа поста
     if request["post_type"] == "text":
-        db.execute(
-            "UPDATE suggestions SET post_text = ? WHERE id = ?",
-            (new_text, request_id)
-        )
+        db.execute("UPDATE suggestions SET post_text = ? WHERE id = ?", (new_text, request_id))
     else:
-        db.execute(
-            "UPDATE suggestions SET post_caption = ? WHERE id = ?",
-            (new_text, request_id)
-        )
+        db.execute("UPDATE suggestions SET post_caption = ? WHERE id = ?", (new_text, request_id))
     db.commit()
 
-    # Получаем обновленный объект заявки
     updated_request = get_request(request_id)
 
     try:
-        # Публикуем отредактированный пост в канал
         await publish_post(updated_request)
-
-        # Меняем статус в БД на accepted
-        db.execute(
-            "UPDATE suggestions SET status = 'accepted' WHERE id = ?",
-            (request_id,)
-        )
+        db.execute("UPDATE suggestions SET status = 'accepted' WHERE id = ?", (request_id,))
         db.commit()
 
-        await message.answer(
-            f"✅ Заявка №{request_id} успешно отредактирована и опубликована в канал!",
-            reply_markup=ReplyKeyboardRemove()
-        )
-
-        # Уведомляем автора
+        await message.answer(f"✅ Заявка №{request_id} успешно отредактирована и опубликована!", reply_markup=ReplyKeyboardRemove())
         await bot.send_message(
             updated_request["user_id"],
             "✅ Твой пост (после редактирования администратором) опубликован в канале!\n\nСпасибо за предложку.",
-            reply_markup=main_keyboard()
+            reply_markup=main_keyboard(False)
         )
-
     except TelegramAPIError as error:
         logging.exception("Ошибка публикации отредактированного поста: %s", error)
         await message.answer("❌ Ошибка публикации. Проверь права бота в канале.")
@@ -781,28 +895,18 @@ async def reject_post(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[1])
     request = get_request(request_id)
 
-    if not request:
-        await callback.answer("Заявка не найдена.", show_alert=True)
-        return
-
-    if request["status"] != "pending":
-        await callback.answer("Заявка уже обработана.", show_alert=True)
+    if not request or request["status"] != "pending":
+        await callback.answer("Заявка не найдена или уже обработана.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_reason)
     await state.update_data(request_id=request_id)
 
     await callback.message.answer(
-        f"❌ Отклонение заявки №{request_id}\n\n"
-        "Напиши причину отклонения.\n"
-        "Она будет отправлена автору."
+        f"❌ Отклонение заявки №{request_id}\n\nНапиши причину отклонения. Она будет отправлена автору."
     )
     await callback.answer("Ожидаю причину.")
 
-
-# ==================================================
-# ПРИЧИНА ОТКАЗА
-# ==================================================
 
 @dp.message(AdminStates.waiting_reason)
 async def reject_reason(message: Message, state: FSMContext):
@@ -826,26 +930,14 @@ async def reject_reason(message: Message, state: FSMContext):
     try:
         await bot.send_message(
             request["user_id"],
-            "❌ Твой пост отклонён.\n\n"
-            f"Причина: {html.escape(reason)}",
-            reply_markup=main_keyboard()
+            f"❌ Твой пост отклонён.\n\nПричина: {html.escape(reason)}",
+            reply_markup=main_keyboard(False)
         )
 
-        db.execute(
-            """
-            UPDATE suggestions
-            SET status = 'rejected'
-            WHERE id = ?
-            """,
-            (request_id,)
-        )
+        db.execute("UPDATE suggestions SET status = 'rejected' WHERE id = ?", (request_id,))
         db.commit()
 
-        await message.answer(
-            "✅ Причина отправлена автору.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-
+        await message.answer("✅ Причина отправлена автору.", reply_markup=ReplyKeyboardRemove())
     except TelegramAPIError as error:
         logging.exception("Ошибка отправки причины: %s", error)
         await message.answer("❌ Не удалось отправить причину.")
@@ -854,11 +946,17 @@ async def reject_reason(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ЗАПУСК
+# ЗАПУСК БОТА
 # ==================================================
 
 async def main():
-    logging.info("Бот предложки успешно запущен и готов к работе!")
+    # Создаем локальный файл users.json при старте
+    ensure_users_file()
+    
+    # Запускаем фоновую синхронизацию с GitHub каждые 5 минут
+    asyncio.create_task(github_sync_background_loop())
+
+    logging.info("Бот успешно запущен и готов к работе!")
     await dp.start_polling(bot)
 
 
