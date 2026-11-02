@@ -181,11 +181,14 @@ async def load_users() -> dict:
 
 
 async def save_users(users_data: dict):
-    """Сохраняет пользователей в локальный JSON."""
+    """Сохраняет пользователей в локальный JSON и сразу отправляет на GitHub."""
     async with users_file_lock:
         ensure_users_file()
         with open(GITHUB_USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(users_data, f, ensure_ascii=False, indent=4)
+    
+    # Сразу запускаем синхронизацию с GitHub в фоновом режиме
+    asyncio.create_task(sync_users_to_github())
 
 
 async def register_user(user):
@@ -225,7 +228,6 @@ async def sync_users_to_github():
 
     async with aiohttp.ClientSession() as session:
         try:
-            # Получаем SHA текущего файла на удаленном репозитории
             sha = None
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
@@ -251,7 +253,7 @@ async def sync_users_to_github():
 
 
 async def github_sync_background_loop():
-    """Фоновая задача синхронизации каждые 5 минут."""
+    """Фоновая задача синхронизации как страховка каждые 5 минут."""
     while True:
         await asyncio.sleep(300)
         await sync_users_to_github()
@@ -464,9 +466,8 @@ async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
         try:
             await bot.copy_message(chat_id=target_id, from_chat_id=from_chat_id, message_id=msg_id)
             delivered += 1
-            await asyncio.sleep(0.05) # Небольшая задержка против флуд-контроля Telegram
+            await asyncio.sleep(0.05)
         except TelegramForbiddenError:
-            # Пользователь заблокировал бота
             user_info["status"] = "blocked"
             failed += 1
         except TelegramAPIError:
@@ -474,7 +475,6 @@ async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
         except Exception:
             failed += 1
 
-    # Сохраняем обновленные статусы пользователей (заблокированные)
     await save_users(users)
 
     await bot.send_message(
@@ -950,10 +950,7 @@ async def reject_reason(message: Message, state: FSMContext):
 # ==================================================
 
 async def main():
-    # Создаем локальный файл users.json при старте
     ensure_users_file()
-    
-    # Запускаем фоновую синхронизацию с GitHub каждые 5 минут
     asyncio.create_task(github_sync_background_loop())
 
     logging.info("Бот успешно запущен и готов к работе!")
