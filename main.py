@@ -34,6 +34,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = 7837011810
 CHANNEL_ID = "@zapillspost"
+RENDER_URL = "https://iris-store-bot-eqkf.onrender.com/"
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_OWNER = os.getenv("GITHUB_OWNER", "").strip()
@@ -75,6 +76,34 @@ def run_web_server():
     server.serve_forever()
 
 Thread(target=run_web_server, daemon=True).start()
+
+
+# ==================================================
+# АВТОПИНГ (БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРОБУЖДЕНИЯ)
+# ==================================================
+
+async def self_ping_loop():
+    """Каждые 5 минут пингует сайт. Если он спит — стучится бесконечно, пока не разбудит."""
+    while True:
+        await asyncio.sleep(300)  # Интервал 5 минут
+        success = False
+        attempt = 1
+        
+        async with aiohttp.ClientSession() as session:
+            while not success:
+                try:
+                    async with session.get(RENDER_URL, timeout=10) as resp:
+                        if resp.status == 200:
+                            logging.info(f"🔄 Автопинг успешен! Сайт бодрствует (попытка {attempt}).")
+                            success = True
+                        else:
+                            logging.warning(f"⚠️ Автопинг: сервер вернул код {resp.status}, пробуем снова...")
+                            attempt += 1
+                            await asyncio.sleep(5)  # Пауза 5 секунд перед повторной попыткой
+                except Exception as e:
+                    logging.warning(f"💤 Сайт спит или недоступен (попытка {attempt}): {e}. Пробуем еще раз...")
+                    attempt += 1
+                    await asyncio.sleep(5)  # Повторяем попытку сразу (через 5 секунд) бесконечно
 
 
 # ==================================================
@@ -961,6 +990,7 @@ async def reject_reason(message: Message, state: FSMContext):
 async def main():
     ensure_users_file()
     asyncio.create_task(github_sync_background_loop())
+    asyncio.create_task(self_ping_loop())  # Запускаем бесконечный автопинг
 
     logging.info("Бот успешно запущен и готов к работе!")
     await dp.start_polling(bot)
