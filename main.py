@@ -207,14 +207,16 @@ def support_admin_keyboard(user_id):
 
 
 # ==================================================
-# ССЫЛКА НА АВТОРА
+# ССЫЛКА НА АВТОРА (ОТКРЫВАЕТ ЧАТ НАПРЯМУЮ)
 # ==================================================
 
 def author_link(user_id, name, username=None):
     safe_name = html.escape(name)
     if username:
+        # Если есть юзернейм, открывает чат по нику
         return f'<a href="https://t.me/{username}">{safe_name}</a>'
-    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+    # Если юзернейма нет, открывает диалог напрямую по ID без карточки профиля
+    return f'<a href="tg://openmessage?user_id={user_id}">{safe_name}</a>'
 
 
 # ==================================================
