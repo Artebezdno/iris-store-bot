@@ -437,24 +437,32 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПУБЛИКАЦИЯ И УДАЛЕНИЕ
+# ПУБЛИКАЦИЯ И УДАЛЕНИЕ (С ЗАЩИТОЙ ОТ ТАЙМАУТОВ)
 # ==================================================
 
 async def publish_post(request):
     author = author_link(request["user_id"], request["author_name"]) if not request["is_anon"] else None
     ptype = request["post_type"]
 
-    if ptype == "text":
-        txt = html.escape(request["post_text"])
-        await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
-    elif ptype == "photo":
-        cap = html.escape(request["post_caption"])
-        final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
-        await bot.send_photo(CHANNEL_ID, photo=request["file_id"], caption=final_cap)
-    elif ptype == "video":
-        cap = html.escape(request["post_caption"])
-        final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
-        await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
+    for attempt in range(3):
+        try:
+            if ptype == "text":
+                txt = html.escape(request["post_text"])
+                await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
+            elif ptype == "photo":
+                cap = html.escape(request["post_caption"])
+                final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
+                await bot.send_photo(CHANNEL_ID, photo=request["file_id"], caption=final_cap)
+            elif ptype == "video":
+                cap = html.escape(request["post_caption"])
+                final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
+                await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
+            return True
+        except TelegramAPIError as e:
+            if attempt == 2:
+                raise e
+            await asyncio.sleep(2)
+    return False
 
 @dp.callback_query(F.data.startswith("accept:"))
 async def accept_post(callback: CallbackQuery):
