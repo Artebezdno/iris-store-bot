@@ -141,13 +141,10 @@ async def save_suggestions(suggestions_data: dict):
 
 
 def get_request(request_id):
-    # Синхронная обертка для поиска в словаре
-    # Читаем файл синхронно для быстрого доступа
     try:
         with open(GITHUB_SUGGESTIONS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            req = data.get(str(request_id))
-            return req
+            return data.get(str(request_id))
     except Exception:
         return None
 
@@ -310,7 +307,68 @@ async def cancel_suggestion(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ПРЕДЛОЖКА ПОСТОВ И СОХРАНЕНИЕ НА GITHUB
+# РАССЫЛКА ДЛЯ АДМИНА
+# ==================================================
+
+@dp.message(F.text == "📢 Рассылка")
+async def broadcast_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_broadcast_message)
+    await message.answer("📢 Отправьте сообщение для рассылки всем пользователям:", reply_markup=cancel_keyboard())
+
+@dp.message(AdminStates.waiting_broadcast_message)
+async def broadcast_preview(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена.", reply_markup=main_keyboard(True))
+        return
+    await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
+    await message.answer("👇 Запустить рассылку этого сообщения?", reply_markup=broadcast_confirm_keyboard())
+
+@dp.callback_query(F.data == "broadcast_cancel")
+async def broadcast_cancel_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await callback.message.edit_text("❌ Рассылка отменена.")
+    await callback.message.answer("Главное меню:", reply_markup=main_keyboard(True))
+    await callback.answer()
+
+@dp.callback_query(F.data == "broadcast_confirm")
+async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+    data = await state.get_data()
+    msg_id = data.get("broadcast_message_id")
+    from_chat_id = data.get("broadcast_chat_id")
+    await callback.message.edit_text("🚀 Рассылка запущена...")
+    await state.clear()
+
+    users = await load_users()
+    delivered, failed = 0, 0
+    for uid_str, user_info in users.items():
+        if user_info.get("status") == "blocked":
+            continue
+        try:
+            await bot.copy_message(chat_id=user_info["user_id"], from_chat_id=from_chat_id, message_id=msg_id)
+            delivered += 1
+            await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            user_info["status"] = "blocked"
+            failed += 1
+        except Exception:
+            failed += 1
+    await save_users(users)
+    await bot.send_message(ADMIN_ID, f"📊 Рассылка завершена!\n✅ Доставлено: {delivered}\n❌ Ошибок: {failed}", reply_markup=main_keyboard(True))
+    await callback.answer()
+
+
+# ==================================================
+# ПРЕДЛОЖКА ПОСТОВ
 # ==================================================
 
 @dp.message(F.text == "📩 Предложить пост")
@@ -345,9 +403,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     is_anon = int(callback.data.split(":")[1])
     data = await state.get_data()
 
-    # Генерируем уникальный ID на основе времени, чтобы он не сбрасывался
     request_id = str(int(asyncio.get_event_loop().time() * 1000))
-
     suggestions = await load_suggestions()
     suggestions[request_id] = {
         "id": request_id,
@@ -366,11 +422,11 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     anon_status = "🕶 Анонимно" if is_anon else "👤 С автором"
     try:
         if data["post_type"] == "text":
-            await bot.send_message(ADMIN_ID, f"📩 Новая заявка ({anon_status})\n\n📝 Текст:\n{data['post_text']}", reply_markup=admin_keyboard(request_id))
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} ({anon_status})\n\n📝 Текст:\n{data['post_text']}", reply_markup=admin_keyboard(request_id))
         elif data["post_type"] == "photo":
-            await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка ({anon_status})", reply_markup=admin_keyboard(request_id))
+            await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
         elif data["post_type"] == "video":
-            await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка ({anon_status})", reply_markup=admin_keyboard(request_id))
+            await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
 
         await callback.message.edit_text("✅ Твой пост отправлен администратору!")
         await callback.message.answer("Главное меню:", reply_markup=main_keyboard(False))
@@ -381,7 +437,7 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПУБЛИКАЦИЯ И УДАЛЕНИЕ ИЗ GITHUB
+# ПУБЛИКАЦИЯ И УДАЛЕНИЕ
 # ==================================================
 
 async def publish_post(request):
@@ -403,6 +459,7 @@ async def publish_post(request):
 @dp.callback_query(F.data.startswith("accept:"))
 async def accept_post(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
         return
     request_id = callback.data.split(":")[1]
     suggestions = await load_suggestions()
@@ -410,26 +467,93 @@ async def accept_post(callback: CallbackQuery):
 
     if not request:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("⚠️ Заявка уже удалена или обработана.", show_alert=True)
+        await callback.answer("⚠️ Заявка уже обработана или удалена.", show_alert=True)
         return
 
     try:
         await publish_post(request)
-        # Удаляем заявку из словаря и сохраняем на GitHub
         del suggestions[request_id]
         await save_suggestions(suggestions)
 
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("✅ Пост опубликован и удален из базы!")
+        await callback.answer("✅ Пост опубликован!")
         await bot.send_message(request["user_id"], "✅ Твой пост опубликован в канале!")
     except Exception as e:
         logging.error(f"Ошибка публикации: {e}")
         await callback.answer("❌ Ошибка публикации.", show_alert=True)
 
 
+# ==================================================
+# РЕДАКТИРОВАНИЕ ПОСТА АДМИНОМ
+# ==================================================
+
+@dp.callback_query(F.data.startswith("edit_prep:"))
+async def edit_post_prep(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+
+    request_id = callback.data.split(":")[1]
+    request = get_request(request_id)
+
+    if not request:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("⚠️ Заявка не найдена.", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_edit_text)
+    await state.update_data(request_id=request_id)
+
+    await callback.message.answer(f"✏️ Редактирование заявки №{request_id}\n\nОтправь новый текст (или подпись):")
+    await callback.answer("Ожидаю текст.")
+
+@dp.message(AdminStates.waiting_edit_text)
+async def save_edited_post(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    new_text = message.text or message.caption
+    if not new_text:
+        await message.answer("❌ Отправь текст обычным сообщением.")
+        return
+
+    data = await state.get_data()
+    request_id = data["request_id"]
+    suggestions = await load_suggestions()
+    request = suggestions.get(request_id)
+
+    if not request:
+        await message.answer("Заявка не найдена.")
+        await state.clear()
+        return
+
+    if request["post_type"] == "text":
+        request["post_text"] = new_text
+    else:
+        request["post_caption"] = new_text
+
+    try:
+        await publish_post(request)
+        del suggestions[request_id]
+        await save_suggestions(suggestions)
+
+        await message.answer(f"✅ Заявка №{request_id} отредактирована и опубликована!", reply_markup=ReplyKeyboardRemove())
+        await bot.send_message(request["user_id"], "✅ Твой пост (после редактирования администратором) опубликован в канале!")
+    except Exception as e:
+        logging.error(f"Ошибка публикации отредактированного поста: {e}")
+        await message.answer("❌ Ошибка публикации.")
+
+    await state.clear()
+
+
+# ==================================================
+# ОТКЛОНЕНИЕ ЗАЯВКИ
+# ==================================================
+
 @dp.callback_query(F.data.startswith("reject:"))
 async def reject_post(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
         return
     request_id = callback.data.split(":")[1]
     request = get_request(request_id)
@@ -440,7 +564,7 @@ async def reject_post(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AdminStates.waiting_reason)
     await state.update_data(request_id=request_id)
-    await callback.message.answer(f"❌ Напиши причину отклонения для заявки:")
+    await callback.message.answer(f"❌ Напиши причину отклонения:")
     await callback.answer()
 
 @dp.message(AdminStates.waiting_reason)
@@ -464,7 +588,7 @@ async def reject_reason(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ПОДДЕРЖКА И РАССЫЛКА
+# ПОДДЕРЖКА
 # ==================================================
 
 @dp.message(F.text == "💬 Поддержка")
@@ -476,6 +600,7 @@ async def support_start(message: Message, state: FSMContext):
 async def receive_support_message(message: Message, state: FSMContext):
     if message.text == "❌ Отмена":
         await state.clear()
+        await message.answer("❌ Отменено.", reply_markup=main_keyboard(message.from_user.id == ADMIN_ID))
         return
     user = message.from_user
     await bot.send_message(ADMIN_ID, f"💬 Обращение от {user.full_name} (ID: {user.id}):\n\n{message.text}", reply_markup=support_admin_keyboard(user.id))
