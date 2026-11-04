@@ -446,23 +446,24 @@ async def publish_post(request):
 
     for attempt in range(3):
         try:
+            sent_message = None
             if ptype == "text":
                 txt = html.escape(request["post_text"])
-                await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
+                sent_message = await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
             elif ptype == "photo":
                 cap = html.escape(request["post_caption"])
                 final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
-                await bot.send_photo(CHANNEL_ID, photo=request["file_id"], caption=final_cap)
+                sent_message = await bot.send_photo(CHANNEL_ID, photo=request["file_id"], caption=final_cap)
             elif ptype == "video":
                 cap = html.escape(request["post_caption"])
                 final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
-                await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
-            return True
+                sent_message = await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
+            return sent_message  # Возвращаем объект отправленного сообщения для ссылки
         except TelegramAPIError as e:
             if attempt == 2:
                 raise e
             await asyncio.sleep(2)
-    return False
+    return None
 
 @dp.callback_query(F.data.startswith("accept:"))
 async def accept_post(callback: CallbackQuery):
@@ -479,13 +480,22 @@ async def accept_post(callback: CallbackQuery):
         return
 
     try:
-        await publish_post(request)
+        sent_message = await publish_post(request)
+        
+        channel_username = CHANNEL_ID.replace("@", "")
+        post_link = f"https://t.me/{channel_username}/{sent_message.message_id}"
+
         del suggestions[request_id]
         await save_suggestions(suggestions)
 
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer("✅ Пост опубликован!")
-        await bot.send_message(request["user_id"], "✅ Твой пост опубликован в канале!")
+        
+        # Отправляем автору уведомление со ссылкой
+        await bot.send_message(
+            request["user_id"], 
+            f"🔥 Твою историю опубликовали!\nПосмотреть можно здесь: {post_link}"
+        )
     except Exception as e:
         logging.error(f"Ошибка публикации: {e}")
         await callback.answer("❌ Ошибка публикации.", show_alert=True)
@@ -541,12 +551,21 @@ async def save_edited_post(message: Message, state: FSMContext):
         request["post_caption"] = new_text
 
     try:
-        await publish_post(request)
+        sent_message = await publish_post(request)
+        
+        channel_username = CHANNEL_ID.replace("@", "")
+        post_link = f"https://t.me/{channel_username}/{sent_message.message_id}"
+
         del suggestions[request_id]
         await save_suggestions(suggestions)
 
         await message.answer(f"✅ Заявка №{request_id} отредактирована и опубликована!", reply_markup=ReplyKeyboardRemove())
-        await bot.send_message(request["user_id"], "✅ Твой пост (после редактирования администратором) опубликован в канале!")
+        
+        # Отправляем автору уведомление со ссылкой
+        await bot.send_message(
+            request["user_id"], 
+            f"🔥 Твою историю (после правок) опубликовали!\nПосмотреть можно здесь: {post_link}"
+        )
     except Exception as e:
         logging.error(f"Ошибка публикации отредактированного поста: {e}")
         await message.answer("❌ Ошибка публикации.")
