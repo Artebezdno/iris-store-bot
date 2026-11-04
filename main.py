@@ -368,14 +368,14 @@ async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПРЕДЛОЖКА ПОСТОВ
+# ПРЕДЛОЖКА ПОСТОВ (С ПОДДЕРЖКОЙ СТИКЕРОВ)
 # ==================================================
 
 @dp.message(F.text == "📩 Предложить пост")
 async def suggest_post(message: Message, state: FSMContext):
     await register_user(message.from_user)
     await state.set_state(SuggestionStates.waiting_post)
-    await message.answer("📩 Отправь свой пост следующим сообщением (текст, фото или видео):", reply_markup=cancel_keyboard())
+    await message.answer("📩 Отправь свой пост следующим сообщением (текст, фото, видео или стикер):", reply_markup=cancel_keyboard())
 
 @dp.message(SuggestionStates.waiting_post)
 async def receive_post(message: Message, state: FSMContext):
@@ -385,8 +385,10 @@ async def receive_post(message: Message, state: FSMContext):
         post_type, post_text, file_id, post_caption = "photo", "", message.photo[-1].file_id, message.caption or ""
     elif message.video:
         post_type, post_text, file_id, post_caption = "video", "", message.video.file_id, message.caption or ""
+    elif message.sticker:
+        post_type, post_text, file_id, post_caption = "sticker", "", message.sticker.file_id, ""
     else:
-        await message.answer("❌ Отправь текст, фото или видео.")
+        await message.answer("❌ Отправь текст, фото, видео или стикер.")
         return
 
     user = message.from_user
@@ -427,6 +429,9 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
             await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
         elif data["post_type"] == "video":
             await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
+        elif data["post_type"] == "sticker":
+            await bot.send_sticker(ADMIN_ID, sticker=data["file_id"])
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} (Стикер | {anon_status})", reply_markup=admin_keyboard(request_id))
 
         await callback.message.edit_text("✅ Твой пост отправлен администратору!")
         await callback.message.answer("Главное меню:", reply_markup=main_keyboard(False))
@@ -458,7 +463,11 @@ async def publish_post(request):
                 cap = html.escape(request["post_caption"])
                 final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
                 sent_message = await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
-            return sent_message  # Возвращаем объект отправленного сообщения для ссылки
+            elif ptype == "sticker":
+                sent_message = await bot.send_sticker(CHANNEL_ID, sticker=request["file_id"])
+                if author:
+                    await bot.send_message(CHANNEL_ID, f"👤: {author}")
+            return sent_message
         except TelegramAPIError as e:
             if attempt == 2:
                 raise e
@@ -491,7 +500,6 @@ async def accept_post(callback: CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer("✅ Пост опубликован!")
         
-        # Отправляем автору уведомление со ссылкой
         await bot.send_message(
             request["user_id"], 
             f"🔥 Твою историю опубликовали!\nПосмотреть можно здесь: {post_link}"
@@ -561,7 +569,6 @@ async def save_edited_post(message: Message, state: FSMContext):
 
         await message.answer(f"✅ Заявка №{request_id} отредактирована и опубликована!", reply_markup=ReplyKeyboardRemove())
         
-        # Отправляем автору уведомление со ссылкой
         await bot.send_message(
             request["user_id"], 
             f"🔥 Твою историю (после правок) опубликовали!\nПосмотреть можно здесь: {post_link}"
