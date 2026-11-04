@@ -368,7 +368,7 @@ async def broadcast_execute(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПРЕДЛОЖКА ПОСТОВ (С СОХРАНЕНИЕМ ОРИГИНАЛА)
+# ПРЕДЛОЖКА ПОСТОВ
 # ==================================================
 
 @dp.message(F.text == "📩 Предложить пост")
@@ -395,7 +395,6 @@ async def receive_post(message: Message, state: FSMContext):
     await state.update_data(
         user_id=user.id, post_type=post_type, post_text=post_text,
         post_caption=post_caption, file_id=file_id,
-        original_message_id=message.message_id,  # Сохраняем ID оригинального сообщения
         author_name=user.full_name or "Автор", username=user.username or ""
     )
     await state.set_state(SuggestionStates.waiting_anon_choice)
@@ -418,24 +417,21 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
         "post_caption": data["post_caption"],
         "post_type": data["post_type"],
         "file_id": data["file_id"],
-        "original_message_id": data["original_message_id"],
         "is_anon": is_anon
     }
     await save_suggestions(suggestions)
 
     anon_status = "🕶 Анонимно" if is_anon else "👤 С автором"
     try:
-        # Пересылаем админу копию поста для проверки в первозданном виде (со всеми фишками)
-        await bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=data["user_id"],
-            message_id=data["original_message_id"]
-        )
-        await bot.send_message(
-            ADMIN_ID, 
-            f"📩 Новая заявка №{request_id} ({anon_status})", 
-            reply_markup=admin_keyboard(request_id)
-        )
+        if data["post_type"] == "text":
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} ({anon_status})\n\n📝 Текст:\n{data['post_text']}", reply_markup=admin_keyboard(request_id))
+        elif data["post_type"] == "photo":
+            await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
+        elif data["post_type"] == "video":
+            await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
+        elif data["post_type"] == "sticker":
+            await bot.send_sticker(ADMIN_ID, sticker=data["file_id"])
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} (Стикер | {anon_status})", reply_markup=admin_keyboard(request_id))
 
         await callback.message.edit_text("✅ Твой пост отправлен администратору!")
         await callback.message.answer("Главное меню:", reply_markup=main_keyboard(False))
@@ -446,24 +442,31 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================================================
-# ПУБЛИКАЦИЯ И УДАЛЕНИЕ (ЧЕРЕЗ copy_message)
+# ПУБЛИКАЦИЯ И УДАЛЕНИЕ (КЛАССИЧЕСКИЙ МЕТОД С ПОДПИСЬЮ)
 # ==================================================
 
 async def publish_post(request):
+    author = author_link(request["user_id"], request["author_name"]) if not request["is_anon"] else None
+    ptype = request["post_type"]
+
     for attempt in range(3):
         try:
-            # Копируем оригинальное сообщение пользователя в канал один в один
-            sent_message = await bot.copy_message(
-                chat_id=CHANNEL_ID,
-                from_chat_id=request["user_id"],
-                message_id=request["original_message_id"]
-            )
-            
-            # Если пост не анонимный, отправляем подпись автора отдельным сообщением снизу
-            if not request["is_anon"]:
-                author = author_link(request["user_id"], request["author_name"])
-                await bot.send_message(CHANNEL_ID, f"👤: {author}")
-                
+            sent_message = None
+            if ptype == "text":
+                txt = html.escape(request["post_text"])
+                sent_message = await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
+            elif ptype == "photo":
+                cap = html.escape(request["post_caption"])
+                final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
+                sent_message = await bot.send_photo(CHANNEL_ID, photo=request["file_id"], caption=final_cap)
+            elif ptype == "video":
+                cap = html.escape(request["post_caption"])
+                final_cap = f"{cap}\n\n👤: {author}" if cap and author else (cap or (f"👤: {author}" if author else None))
+                sent_message = await bot.send_video(CHANNEL_ID, video=request["file_id"], caption=final_cap)
+            elif ptype == "sticker":
+                sent_message = await bot.send_sticker(CHANNEL_ID, sticker=request["file_id"])
+                if author:
+                    await bot.send_message(CHANNEL_ID, f"👤: {author}")
             return sent_message
         except TelegramAPIError as e:
             if attempt == 2:
@@ -497,7 +500,6 @@ async def accept_post(callback: CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer("✅ Пост опубликован!")
         
-        # Уведомляем автора и кидаем ссылку
         await bot.send_message(
             request["user_id"], 
             f"🔥 Твою историю опубликовали!\nПосмотреть можно здесь: {post_link}"
@@ -551,15 +553,13 @@ async def save_edited_post(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Обновляем текст в базе и публикуем текстом, если админ прислал правку
-    request["post_type"] = "text"
-    request["post_text"] = new_text
+    if request["post_type"] == "text":
+        request["post_text"] = new_text
+    else:
+        request["post_caption"] = new_text
 
     try:
-        # Для отредактированного текста публикуем измененный вариант
-        author = author_link(request["user_id"], request["author_name"]) if not request["is_anon"] else None
-        txt = html.escape(request["post_text"])
-        sent_message = await bot.send_message(CHANNEL_ID, f"{txt}\n\n👤: {author}" if author else txt)
+        sent_message = await publish_post(request)
         
         channel_username = CHANNEL_ID.replace("@", "")
         post_link = f"https://t.me/{channel_username}/{sent_message.message_id}"
@@ -593,7 +593,7 @@ async def reject_post(callback: CallbackQuery, state: FSMContext):
     request = get_request(request_id)
     if not request:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("⚠️ Заявка не найдена.", show_alert=True)
+        await callback.answer("⚠️ Заявка уже обработана или удалена.", show_alert=True)
         return
 
     await state.set_state(AdminStates.waiting_reason)
