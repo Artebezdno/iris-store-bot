@@ -121,6 +121,29 @@ def ensure_file(filepath):
             json.dump({}, f, ensure_ascii=False, indent=4)
 
 
+async def download_file_from_github(filepath):
+    if not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
+        return
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{filepath}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    res_json = await resp.json()
+                    content_encoded = res_json.get("content", "")
+                    content_bytes = base64.b64decode(content_encoded)
+                    ensure_file(filepath)
+                    with open(filepath, "wb") as f:
+                        f.write(content_bytes)
+                    logging.info(f"{filepath} успешно скачан с GitHub при старте.")
+        except Exception as e:
+            logging.warning(f"Не удалось скачать {filepath} с GitHub: {e}")
+
+
 async def load_suggestions() -> dict:
     async with suggestions_file_lock:
         ensure_file(GITHUB_SUGGESTIONS_FILE)
@@ -673,6 +696,10 @@ async def send_support_reply(message: Message, state: FSMContext):
 # ==================================================
 
 async def main():
+    # Скачиваем актуальные файлы с GitHub при старте (защита от сброса на Render при сне)
+    await download_file_from_github(GITHUB_USERS_FILE)
+    await download_file_from_github(GITHUB_SUGGESTIONS_FILE)
+
     ensure_file(GITHUB_USERS_FILE)
     ensure_file(GITHUB_SUGGESTIONS_FILE)
     asyncio.create_task(github_sync_background_loop())
