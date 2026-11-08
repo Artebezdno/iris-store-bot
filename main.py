@@ -9,8 +9,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
 import aiohttp
-from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -34,6 +34,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = 7837011810
 CHANNEL_ID = "@zapillspost"
+CHANNEL_URL = "https://t.me/zapillspost"
 RENDER_URL = "https://iris-store-bot-eqkf.onrender.com/"
 
 # Лимит между постами (в секундах). 300 = 5 минут
@@ -301,10 +302,41 @@ class AdminStates(StatesGroup):
 
 
 def main_keyboard(is_admin: bool = False):
-    keyboard = [[KeyboardButton(text="📩 Предложить пост"), KeyboardButton(text="💬 Поддержка")]]
+    keyboard = [
+        [KeyboardButton(text="📩 Предложить пост"), KeyboardButton(text="💬 Поддержка")],
+        [KeyboardButton(text="ℹ️ О проекте")]
+    ]
     if is_admin:
-        keyboard.append([KeyboardButton(text="📢 Рассылка")])
+        keyboard[1].append(KeyboardButton(text="📢 Рассылка"))
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+ABOUT_TEXT = (
+    "ℹ️ <b>Как пользоваться ботом</b>\n\n"
+    "Через этого бота можно отправить свой пост в наш канал.\n\n"
+    "<b>Что делать:</b>\n\n"
+    "1️⃣ Нажми «📩 Предложить пост»\n"
+    "2️⃣ Отправь то, что хочешь опубликовать: текст, фото, видео или стикер\n"
+    "3️⃣ Выбери, как подписать: 👤 с твоим именем или 🕶 анонимно\n"
+    "4️⃣ Готово! Администратор посмотрит заявку, а когда пост выйдет, бот пришлёт тебе ссылку\n\n"
+    "<b>Полезно знать:</b>\n\n"
+    "• 📢 Пользоваться ботом можно только подписчикам канала\n"
+    "• ⏳ Новый пост можно отправить раз в 5 минут\n"
+    "• ❌ Если пост не подошёл, бот напишет причину\n"
+    "• 💬 Остались вопросы? Кнопка «Поддержка» ведёт прямо к администратору"
+)
+
+SUB_TEXT = (
+    "📢 <b>Чтобы пользоваться ботом, подпишись на наш канал.</b>\n\n"
+    "Подпишись и нажми «✅ Я подписался»."
+)
+
+
+def subscribe_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL)],
+        [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
+    ])
 
 
 def cancel_keyboard():
@@ -353,6 +385,64 @@ async def notify_user(user_id, text):
 
 
 # ==================================================
+# ОБЯЗАТЕЛЬНАЯ ПОДПИСКА НА КАНАЛ
+# ==================================================
+
+async def is_subscribed(user_id: int) -> bool:
+    """Проверяет, что пользователь состоит в канале.
+    Бот должен быть администратором канала (он уже им является, раз публикует посты)."""
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+    except Exception as e:
+        # Если проверить не удалось, не блокируем людей из-за сбоя Telegram
+        logging.warning(f"Не удалось проверить подписку {user_id}: {e}")
+        return True
+
+    if member.status in (
+        ChatMemberStatus.CREATOR,
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.MEMBER,
+    ):
+        return True
+    if member.status == ChatMemberStatus.RESTRICTED and getattr(member, "is_member", False):
+        return True
+    return False
+
+
+class SubscriptionMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = data.get("event_from_user")
+
+        # Админа и неопределённых пользователей не проверяем
+        if user is None or user.id == ADMIN_ID:
+            return await handler(event, data)
+
+        # Кнопку «Я подписался» пропускаем, она сама проверяет подписку
+        if isinstance(event, CallbackQuery) and event.data == "check_sub":
+            return await handler(event, data)
+
+        if await is_subscribed(user.id):
+            return await handler(event, data)
+
+        # Не подписан: запоминаем для рассылки и показываем просьбу подписаться
+        users = await load_users()
+        if str(user.id) not in users:
+            await register_user(user)
+
+        if isinstance(event, Message):
+            await event.answer(SUB_TEXT, reply_markup=subscribe_keyboard())
+        elif isinstance(event, CallbackQuery):
+            await event.answer("📢 Сначала подпишись на канал!", show_alert=True)
+            if event.message:
+                await event.message.answer(SUB_TEXT, reply_markup=subscribe_keyboard())
+        return None
+
+
+dp.message.outer_middleware(SubscriptionMiddleware())
+dp.callback_query.outer_middleware(SubscriptionMiddleware())
+
+
+# ==================================================
 # ХЕНДЛЕРЫ СТАРТА И ОТМЕНЫ
 # ==================================================
 
@@ -368,6 +458,29 @@ async def start(message: Message, state: FSMContext):
 async def cancel_suggestion(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Действие отменено.", reply_markup=main_keyboard(message.from_user.id == ADMIN_ID))
+
+
+@dp.message(F.text == "ℹ️ О проекте")
+async def about_project(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(ABOUT_TEXT)
+
+
+@dp.callback_query(F.data == "check_sub")
+async def check_subscription(callback: CallbackQuery):
+    if await is_subscribed(callback.from_user.id):
+        await register_user(callback.from_user)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(
+            "✅ Спасибо за подписку! Теперь бот полностью доступен.",
+            reply_markup=main_keyboard(callback.from_user.id == ADMIN_ID)
+        )
+        await callback.answer()
+    else:
+        await callback.answer("❌ Ты ещё не подписан на канал.", show_alert=True)
 
 
 # ==================================================
