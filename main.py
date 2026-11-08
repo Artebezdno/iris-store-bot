@@ -311,7 +311,7 @@ def main_keyboard(is_admin: bool = False):
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-ABOUT_TEXT = (
+HOW_TEXT = (
     "ℹ️ <b>Как пользоваться ботом</b>\n\n"
     "Через этого бота можно отправить свой пост в наш канал.\n\n"
     "<b>Что делать:</b>\n\n"
@@ -325,6 +325,64 @@ ABOUT_TEXT = (
     "• ❌ Если пост не подошёл, бот напишет причину\n"
     "• 💬 Остались вопросы? Кнопка «Поддержка» ведёт прямо к администратору"
 )
+
+FAQ_TITLE = "❓ <b>Частые вопросы</b>\n\nВыбери, что тебя интересует:"
+
+# ключ -> (название кнопки, текст ответа)
+FAQ_ITEMS = {
+    "how": ("ℹ️ Как пользоваться ботом", HOW_TEXT),
+    "limit": (
+        "⏳ Почему нужно ждать 5 минут?",
+        "⏳ <b>Почему нужно ждать 5 минут?</b>\n\n"
+        "Между постами нужна пауза, чтобы заявки не копились пачками.\n\n"
+        "Таймер включается только после того, как заявка дошла до администратора. "
+        "Если ты отменил отправку, ждать не придётся."
+    ),
+    "anon": (
+        "🕶 Можно ли анонимно?",
+        "🕶 <b>Можно ли анонимно?</b>\n\n"
+        "Да! После отправки поста бот спросит, как его подписать:\n\n"
+        "• 👤 <b>С автором</b>: в канале будет твоё имя со ссылкой на профиль\n"
+        "• 🕶 <b>Анонимно</b>: твоё имя в канале не показывается"
+    ),
+    "reject": (
+        "❌ Почему отклонили пост?",
+        "❌ <b>Почему отклонили пост?</b>\n\n"
+        "Бот пришлёт причину отказа. Если что-то непонятно, напиши в «💬 Поддержку», "
+        "администратор ответит прямо в этот чат."
+    ),
+    "edit": (
+        "✏️ Могут ли изменить мой пост?",
+        "✏️ <b>Могут ли изменить мой пост?</b>\n\n"
+        "Да, администратор может поправить текст перед публикацией, например исправить опечатки."
+    ),
+    "link": (
+        "📬 Как узнать, что пост вышел?",
+        "📬 <b>Как узнать, что пост вышел?</b>\n\n"
+        "Когда пост опубликуют, бот сам пришлёт тебе ссылку на него в канале."
+    ),
+    "support": (
+        "💬 Как связаться с админом?",
+        "💬 <b>Как связаться с админом?</b>\n\n"
+        "Нажми «💬 Поддержка» в главном меню и напиши сообщение. "
+        "Ответ придёт сюда, в этот же чат."
+    ),
+}
+
+
+def faq_menu_keyboard():
+    rows = [
+        [InlineKeyboardButton(text=title, callback_data=f"faq:{key}")]
+        for key, (title, _) in FAQ_ITEMS.items()
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def faq_back_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="faq:menu")
+    ]])
+
 
 SUB_TEXT = (
     "📢 <b>Чтобы пользоваться ботом, подпишись на наш канал.</b>\n\n"
@@ -460,10 +518,29 @@ async def cancel_suggestion(message: Message, state: FSMContext):
     await message.answer("❌ Действие отменено.", reply_markup=main_keyboard(message.from_user.id == ADMIN_ID))
 
 
-@dp.message(F.text == "ℹ️ О проекте")
-async def about_project(message: Message, state: FSMContext):
+@dp.message(F.text == "ℹ️ FAQ")
+async def faq_open(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(ABOUT_TEXT)
+    await message.answer(FAQ_TITLE, reply_markup=faq_menu_keyboard())
+
+
+@dp.callback_query(F.data.startswith("faq:"))
+async def faq_callback(callback: CallbackQuery):
+    key = callback.data.split(":", 1)[1]
+
+    if key == "menu":
+        text, keyboard = FAQ_TITLE, faq_menu_keyboard()
+    elif key in FAQ_ITEMS:
+        text, keyboard = FAQ_ITEMS[key][1], faq_back_keyboard()
+    else:
+        await callback.answer()
+        return
+
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except TelegramAPIError:
+        pass  # то же сообщение нажали повторно
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "check_sub")
