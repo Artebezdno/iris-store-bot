@@ -80,5 +80,11 @@
         "full_name": "В обработке",
         "status": "active",
         "last_post_ts": 1794080548.1014452
+    },
+    "8499116617": {
+        "user_id": 8499116617,
+        "username": "alwmekd",
+        "full_name": "Шосе 24 Июля",
+        "status": "active"
     }
 }
