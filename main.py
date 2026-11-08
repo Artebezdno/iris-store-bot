@@ -12,7 +12,7 @@ import aiohttp
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -24,7 +24,7 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardRemove,
 )
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramBadRequest
 
 
 # ==================================================
@@ -977,6 +977,57 @@ async def send_support_reply(message: Message, state: FSMContext):
     except Exception:
         await message.answer("❌ Не удалось отправить.")
     await state.clear()
+
+
+# ==================================================
+# ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ ПО ID (ТОЛЬКО АДМИН)
+# Формат:  первая строка — ID, со второй строки — текст
+# ==================================================
+
+@dp.message(StateFilter(None), F.from_user.id == ADMIN_ID, F.text)
+async def admin_direct_message(message: Message):
+    parts = message.text.split("\n", 1)
+    first_line = parts[0].strip()
+
+    # Если первая строка не ID, это обычное сообщение, ничего не делаем
+    if not first_line.isdigit():
+        return
+
+    target_id = int(first_line)
+    text = parts[1].strip() if len(parts) > 1 else ""
+
+    if not text:
+        await message.answer(
+            "⚠️ Не вижу текста.\n\n"
+            "Формат: на первой строке ID, а со второй строки текст сообщения."
+        )
+        return
+
+    try:
+        await bot.send_message(target_id, f"📩 Сообщение от администратора:\n\n{html.escape(text)}")
+        await message.answer(f"✅ Сообщение отправлено пользователю {target_id}.")
+    except TelegramForbiddenError:
+        # Пользователь заблокировал бота или удалил чат
+        users = await load_users()
+        if str(target_id) in users:
+            users[str(target_id)]["status"] = "blocked"
+            await save_users(users)
+        await message.answer(
+            f"❌ Не получилось отправить пользователю {target_id}: "
+            "он заблокировал бота или удалил чат."
+        )
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower():
+            await message.answer(
+                f"❌ Не получилось отправить: пользователь {target_id} не найден. "
+                "Либо он ни разу не запускал бота, либо удалил чат, либо ID неверный."
+            )
+        else:
+            logging.warning(f"Ошибка отправки пользователю {target_id}: {e}")
+            await message.answer(f"❌ Не получилось отправить пользователю {target_id}.")
+    except Exception as e:
+        logging.warning(f"Ошибка отправки пользователю {target_id}: {e}")
+        await message.answer(f"❌ Не получилось отправить пользователю {target_id}.")
 
 
 # ==================================================
