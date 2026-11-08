@@ -304,7 +304,7 @@ class AdminStates(StatesGroup):
 def main_keyboard(is_admin: bool = False):
     keyboard = [
         [KeyboardButton(text="📩 Предложить пост"), KeyboardButton(text="💬 Поддержка")],
-        [KeyboardButton(text="ℹ️ О проекте")]
+        [KeyboardButton(text="ℹ️ FAQ")]
     ]
     if is_admin:
         keyboard[1].append(KeyboardButton(text="📢 Рассылка"))
