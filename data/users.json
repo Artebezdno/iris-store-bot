@@ -58,7 +58,8 @@
         "user_id": 8508182692,
         "username": "Arteaaa09",
         "full_name": "Ваня",
-        "status": "active"
+        "status": "active",
+        "last_support_ts": 1794248592.6316795
     },
     "7437000696": {
         "user_id": 7437000696,
