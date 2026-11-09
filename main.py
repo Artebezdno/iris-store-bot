@@ -40,6 +40,9 @@ RENDER_URL = "https://iris-store-bot-eqkf.onrender.com/"
 # Лимит между постами (в секундах). 300 = 5 минут
 POST_COOLDOWN = 300
 
+# Лимит между обращениями в поддержку (в секундах). 60 = 1 минута
+SUPPORT_COOLDOWN = 60
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_OWNER = os.getenv("GITHUB_OWNER", "").strip()
 GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
@@ -231,6 +234,22 @@ async def get_cooldown_left(user_id: int) -> int:
     users = await load_users()
     last_ts = users.get(str(user_id), {}).get("last_post_ts", 0)
     left = int(last_ts + POST_COOLDOWN - time.time())
+    return max(left, 0)
+
+
+async def set_last_support_time(user_id: int):
+    users = await load_users()
+    uid_str = str(user_id)
+    if uid_str in users:
+        users[uid_str]["last_support_ts"] = time.time()
+        await save_users(users)
+
+
+async def get_support_cooldown_left(user_id: int) -> int:
+    """Сколько секунд осталось до следующего обращения в поддержку (0 — можно писать)."""
+    users = await load_users()
+    last_ts = users.get(str(user_id), {}).get("last_support_ts", 0)
+    left = int(last_ts + SUPPORT_COOLDOWN - time.time())
     return max(left, 0)
 
 
@@ -924,6 +943,19 @@ async def reject_reason(message: Message, state: FSMContext):
 
 @dp.message(F.text == "💬 Поддержка")
 async def support_start(message: Message, state: FSMContext):
+    # Лимит: для админа не действует
+    if message.from_user.id != ADMIN_ID:
+        left = await get_support_cooldown_left(message.from_user.id)
+        if left > 0:
+            await state.clear()
+            minutes, seconds = divmod(left, 60)
+            wait = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
+            await message.answer(
+                f"⏳ Ты уже недавно писал в поддержку. Подожди {wait} перед следующим обращением.",
+                reply_markup=main_keyboard(False)
+            )
+            return
+
     await state.set_state(SupportStates.waiting_message)
     await message.answer("💬 Напиши сообщение для поддержки:", reply_markup=cancel_keyboard())
 
@@ -944,6 +976,7 @@ async def receive_support_message(message: Message, state: FSMContext):
         reply_markup=support_admin_keyboard(user.id)
     )
     await message.answer("✅ Отправлено в поддержку!", reply_markup=main_keyboard(user.id == ADMIN_ID))
+    await set_last_support_time(user.id)
     await state.clear()
 
 
