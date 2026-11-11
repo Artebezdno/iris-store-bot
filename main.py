@@ -12,7 +12,7 @@ import aiohttp
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -318,6 +318,7 @@ class AdminStates(StatesGroup):
     waiting_support_reply = State()
     waiting_edit_text = State()
     waiting_broadcast_message = State()
+    waiting_author_message = State()
 
 
 def main_keyboard(is_admin: bool = False):
@@ -326,7 +327,7 @@ def main_keyboard(is_admin: bool = False):
         [KeyboardButton(text="ℹ️ FAQ")]
     ]
     if is_admin:
-        keyboard[1].append(KeyboardButton(text="📢 Рассылка"))
+        keyboard.append([KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="📊 Статистика")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -427,11 +428,12 @@ def anon_keyboard():
     ]])
 
 
-def admin_keyboard(request_id):
+def admin_keyboard(request_id, user_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Принять", callback_data=f"accept:{request_id}"),
          InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_prep:{request_id}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{request_id}")]
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{request_id}"),
+         InlineKeyboardButton(text="✉️ Написать автору", callback_data=f"write_author:{user_id}")]
     ])
 
 
@@ -580,6 +582,33 @@ async def check_subscription(callback: CallbackQuery):
 
 
 # ==================================================
+# СТАТИСТИКА ДЛЯ АДМИНА
+# ==================================================
+
+@dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
+@dp.message(F.text == "📊 Статистика", F.from_user.id == ADMIN_ID)
+async def show_stats(message: Message, state: FSMContext):
+    await state.clear()
+    users = await load_users()
+    suggestions = await load_suggestions()
+
+    total = len(users)
+    blocked = sum(1 for u in users.values() if u.get("status") == "blocked")
+    active = total - blocked
+    pending = len(suggestions)
+
+    await message.answer(
+        "📊 <b>Статистика</b>\n\n"
+        f"👥 Людей в боте: <b>{active}</b>\n"
+        f"🚫 Заблокировали бота: <b>{blocked}</b>\n"
+        f"📁 Всего запускали: <b>{total}</b>\n\n"
+        f"📩 Заявок на рассмотрении: <b>{pending}</b>\n\n"
+        "✉️ Чтобы написать человеку, отправь ID на первой строке, а текст со второй.",
+        reply_markup=main_keyboard(True)
+    )
+
+
+# ==================================================
 # РАССЫЛКА ДЛЯ АДМИНА
 # ==================================================
 
@@ -721,14 +750,14 @@ async def process_anon_choice(callback: CallbackQuery, state: FSMContext):
     anon_status = "🕶 Анонимно" if is_anon else "👤 С автором"
     try:
         if data["post_type"] == "text":
-            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} ({anon_status})\n\n📝 Текст:\n{html.escape(data['post_text'])}", reply_markup=admin_keyboard(request_id))
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} ({anon_status})\n\n📝 Текст:\n{html.escape(data['post_text'])}", reply_markup=admin_keyboard(request_id, data["user_id"]))
         elif data["post_type"] == "photo":
-            await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
+            await bot.send_photo(ADMIN_ID, photo=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id, data["user_id"]))
         elif data["post_type"] == "video":
-            await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id))
+            await bot.send_video(ADMIN_ID, video=data["file_id"], caption=f"📩 Новая заявка №{request_id} ({anon_status})", reply_markup=admin_keyboard(request_id, data["user_id"]))
         elif data["post_type"] == "sticker":
             await bot.send_sticker(ADMIN_ID, sticker=data["file_id"])
-            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} (Стикер | {anon_status})", reply_markup=admin_keyboard(request_id))
+            await bot.send_message(ADMIN_ID, f"📩 Новая заявка №{request_id} (Стикер | {anon_status})", reply_markup=admin_keyboard(request_id, data["user_id"]))
 
         await callback.message.edit_text("✅ Твой пост отправлен администратору!")
         await callback.message.answer("Главное меню:", reply_markup=main_keyboard(False))
@@ -1013,9 +1042,37 @@ async def send_support_reply(message: Message, state: FSMContext):
 
 
 # ==================================================
-# ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ ПО ID (ТОЛЬКО АДМИН)
-# Формат:  первая строка — ID, со второй строки — текст
+# СООБЩЕНИЯ ОТ АДМИНА ПОЛЬЗОВАТЕЛЯМ
+# 1) по ID: первая строка — ID, со второй строки — текст
+# 2) кнопкой «Написать автору» под заявкой
 # ==================================================
+
+async def deliver_admin_text(target_id: int, text: str, who: str) -> str:
+    """Отправляет текст админа пользователю. Возвращает ответ для админа."""
+    try:
+        await bot.send_message(
+            target_id,
+            f"📩 Сообщение от администратора:\n\n{html.escape(text)}\n\n"
+            "💬 Чтобы ответить, нажми «Поддержка» в меню."
+        )
+        return f"✅ Сообщение отправлено {who}."
+    except TelegramForbiddenError:
+        # Пользователь заблокировал бота или удалил чат
+        users = await load_users()
+        if str(target_id) in users:
+            users[str(target_id)]["status"] = "blocked"
+            await save_users(users)
+        return f"❌ Не получилось отправить {who}: он заблокировал бота или удалил чат."
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower():
+            return (f"❌ Не получилось отправить {who}: чат не найден. "
+                    "Либо он ни разу не запускал бота, либо удалил чат.")
+        logging.warning(f"Ошибка отправки {target_id}: {e}")
+        return f"❌ Не получилось отправить {who}."
+    except Exception as e:
+        logging.warning(f"Ошибка отправки {target_id}: {e}")
+        return f"❌ Не получилось отправить {who}."
+
 
 @dp.message(StateFilter(None), F.from_user.id == ADMIN_ID, F.text)
 async def admin_direct_message(message: Message):
@@ -1036,31 +1093,38 @@ async def admin_direct_message(message: Message):
         )
         return
 
-    try:
-        await bot.send_message(target_id, f"📩 Сообщение от администратора:\n\n{html.escape(text)}")
-        await message.answer(f"✅ Сообщение отправлено пользователю {target_id}.")
-    except TelegramForbiddenError:
-        # Пользователь заблокировал бота или удалил чат
-        users = await load_users()
-        if str(target_id) in users:
-            users[str(target_id)]["status"] = "blocked"
-            await save_users(users)
-        await message.answer(
-            f"❌ Не получилось отправить пользователю {target_id}: "
-            "он заблокировал бота или удалил чат."
-        )
-    except TelegramBadRequest as e:
-        if "chat not found" in str(e).lower():
-            await message.answer(
-                f"❌ Не получилось отправить: пользователь {target_id} не найден. "
-                "Либо он ни разу не запускал бота, либо удалил чат, либо ID неверный."
-            )
-        else:
-            logging.warning(f"Ошибка отправки пользователю {target_id}: {e}")
-            await message.answer(f"❌ Не получилось отправить пользователю {target_id}.")
-    except Exception as e:
-        logging.warning(f"Ошибка отправки пользователю {target_id}: {e}")
-        await message.answer(f"❌ Не получилось отправить пользователю {target_id}.")
+    result = await deliver_admin_text(target_id, text, f"пользователю {target_id}")
+    await message.answer(result)
+
+
+@dp.callback_query(F.data.startswith("write_author:"))
+async def write_author_prepare(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+
+    target_id = int(callback.data.split(":")[1])
+    await state.set_state(AdminStates.waiting_author_message)
+    await state.update_data(target_user_id=target_id)
+    await callback.message.answer(
+        "✍️ Напиши сообщение автору этой заявки:",
+        reply_markup=cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@dp.message(AdminStates.waiting_author_message)
+async def write_author_send(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.text:
+        await message.answer("❌ Отправь сообщение текстом.")
+        return
+
+    data = await state.get_data()
+    result = await deliver_admin_text(data["target_user_id"], message.text, "автору заявки")
+    await message.answer(result, reply_markup=main_keyboard(True))
+    await state.clear()
 
 
 # ==================================================
