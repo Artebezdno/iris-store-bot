@@ -5,6 +5,9 @@ import logging
 import os
 import html
 import time
+import re
+import calendar
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
@@ -25,6 +28,11 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramBadRequest
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # очень старый Python
+    ZoneInfo = None
 
 
 # ==================================================
@@ -301,12 +309,144 @@ async def github_sync_background_loop():
 
 
 # ==================================================
+# ДНИ РОЖДЕНИЯ: ЛОГИКА И ПОЗДРАВЛЕНИЯ
+# ==================================================
+
+BIRTHDAY_HOUR = 9  # во сколько по местному времени поздравлять
+
+
+def get_birthday_tz():
+    if ZoneInfo is not None:
+        for name in ("Europe/Kyiv", "Europe/Kiev"):
+            try:
+                return ZoneInfo(name)
+            except Exception:
+                pass
+    return timezone(timedelta(hours=2))  # запасной вариант
+
+
+BIRTHDAY_TZ = get_birthday_tz()
+
+
+def parse_birthday(text: str):
+    """Возвращает дату как ДД.ММ.ГГГГ или ДД.ММ, либо None, если не распознано."""
+    m = re.fullmatch(r"\s*(\d{1,2})[.\-/ ](\d{1,2})(?:[.\-/ ](\d{4}))?\s*", text or "")
+    if not m:
+        return None
+
+    day, month = int(m.group(1)), int(m.group(2))
+    year = int(m.group(3)) if m.group(3) else None
+    today = datetime.now(BIRTHDAY_TZ).date()
+
+    try:
+        if year is None:
+            datetime(2000, month, day)  # 2000 високосный, поэтому 29.02 допустимо
+            return f"{day:02d}.{month:02d}"
+        born = datetime(year, month, day).date()
+    except ValueError:
+        return None
+
+    if year < 1900 or born > today:
+        return None
+    return f"{day:02d}.{month:02d}.{year}"
+
+
+def is_birthday_today(bday: str, today) -> bool:
+    try:
+        parts = bday.split(".")
+        day, month = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        return False
+    # Родившимся 29 февраля в невисокосный год поздравляем 28-го
+    if day == 29 and month == 2 and not calendar.isleap(today.year):
+        day = 28
+    return (today.day, today.month) == (day, month)
+
+
+async def set_birthday(user_id: int, value):
+    """Сохраняет дату рождения. Старая дата просто заменяется новой. value=None удаляет дату."""
+    users = await load_users()
+    uid_str = str(user_id)
+    if uid_str not in users:
+        return
+    if value:
+        users[uid_str]["birthday"] = value
+    else:
+        users[uid_str].pop("birthday", None)
+    await save_users(users)
+
+
+async def mark_congratulated(user_id: int, year: int, blocked: bool = False):
+    users = await load_users()
+    uid_str = str(user_id)
+    if uid_str not in users:
+        return
+    if blocked:
+        users[uid_str]["status"] = "blocked"
+    else:
+        users[uid_str]["last_congrats_year"] = year
+    await save_users(users)
+
+
+async def check_birthdays():
+    now = datetime.now(BIRTHDAY_TZ)
+    if now.hour < BIRTHDAY_HOUR:
+        return
+
+    users = await load_users()
+    for uid_str, u in list(users.items()):
+        bday = u.get("birthday")
+        if not bday or u.get("status") == "blocked":
+            continue
+        if u.get("last_congrats_year") == now.year:
+            continue  # в этом году уже поздравляли
+        if not is_birthday_today(bday, now.date()):
+            continue
+
+        user_id = u.get("user_id") or int(uid_str)
+        name = html.escape(u.get("full_name") or "друг")
+
+        age_line = ""
+        parts = bday.split(".")
+        if len(parts) == 3:
+            age_line = f"Сегодня тебе исполняется <b>{now.year - int(parts[2])}</b>! "
+
+        text = (
+            f"🎉🎂 <b>С днём рождения, {name}!</b>\n\n"
+            f"{age_line}Желаем отличного настроения, классных людей рядом "
+            "и чтобы всё получалось! 🥳"
+        )
+
+        try:
+            await bot.send_message(user_id, text)
+            await mark_congratulated(user_id, now.year)
+        except TelegramForbiddenError:
+            await mark_congratulated(user_id, now.year, blocked=True)
+        except Exception as e:
+            logging.warning(f"Не удалось поздравить {user_id}: {e}")
+        await asyncio.sleep(0.05)
+
+
+async def birthday_loop():
+    while True:
+        try:
+            await check_birthdays()
+        except Exception as e:
+            logging.exception(f"Ошибка в проверке дней рождения: {e}")
+        await asyncio.sleep(600)  # проверка раз в 10 минут
+
+
+# ==================================================
 # СОСТОЯНИЯ (FSM) И КЛАВИАТУРЫ
 # ==================================================
 
 class SuggestionStates(StatesGroup):
     waiting_post = State()
     waiting_anon_choice = State()
+
+
+class BirthdayStates(StatesGroup):
+    waiting_date = State()
 
 
 class SupportStates(StatesGroup):
@@ -324,7 +464,7 @@ class AdminStates(StatesGroup):
 def main_keyboard(is_admin: bool = False):
     keyboard = [
         [KeyboardButton(text="📩 Предложить пост"), KeyboardButton(text="💬 Поддержка")],
-        [KeyboardButton(text="ℹ️ FAQ")]
+        [KeyboardButton(text="ℹ️ FAQ"), KeyboardButton(text="🎂 День рождения")]
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="📊 Статистика")])
@@ -380,6 +520,14 @@ FAQ_ITEMS = {
         "📬 Как узнать, что пост вышел?",
         "📬 <b>Как узнать, что пост вышел?</b>\n\n"
         "Когда пост опубликуют, бот сам пришлёт тебе ссылку на него в канале."
+    ),
+    "bday": (
+        "🎂 Как указать день рождения?",
+        "🎂 <b>Как указать день рождения?</b>\n\n"
+        "Нажми «🎂 День рождения» в меню и отправь дату в формате ДД.ММ.ГГГГ, например 10.05.2004. "
+        "Год можно не указывать: 10.05.\n\n"
+        "В этот день бот тебя поздравит. Дату можно изменить или удалить в любой момент "
+        "той же кнопкой."
     ),
     "support": (
         "💬 Как связаться с админом?",
@@ -582,6 +730,92 @@ async def check_subscription(callback: CallbackQuery):
 
 
 # ==================================================
+# ДНИ РОЖДЕНИЯ: МЕНЮ
+# ==================================================
+
+BIRTHDAY_PROMPT = (
+    "🎂 <b>Напиши свою дату рождения</b> в формате ДД.ММ.ГГГГ, например <code>10.05.2004</code>\n\n"
+    "Год можно не указывать: <code>10.05</code>\n\n"
+    "В этот день бот тебя поздравит 🎉"
+)
+
+
+def birthday_manage_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✏️ Изменить", callback_data="bday:edit"),
+        InlineKeyboardButton(text="🗑 Удалить", callback_data="bday:delete")
+    ]])
+
+
+@dp.message(F.text == "🎂 День рождения")
+async def birthday_open(message: Message, state: FSMContext):
+    await state.clear()
+    await register_user(message.from_user)
+
+    users = await load_users()
+    bday = users.get(str(message.from_user.id), {}).get("birthday")
+
+    if bday:
+        await message.answer(
+            f"🎂 <b>Твой день рождения:</b> {bday}\n\nВ этот день бот тебя поздравит 🎉",
+            reply_markup=birthday_manage_keyboard()
+        )
+    else:
+        await state.set_state(BirthdayStates.waiting_date)
+        await message.answer(BIRTHDAY_PROMPT, reply_markup=cancel_keyboard())
+
+
+@dp.callback_query(F.data == "bday:edit")
+async def birthday_edit(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BirthdayStates.waiting_date)
+    await callback.message.answer(BIRTHDAY_PROMPT, reply_markup=cancel_keyboard())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "bday:delete")
+async def birthday_delete(callback: CallbackQuery):
+    await set_birthday(callback.from_user.id, None)
+    try:
+        await callback.message.edit_text("🗑 Дата рождения удалена.")
+    except TelegramAPIError:
+        pass
+    await callback.answer()
+
+
+@dp.message(Command("birthdays"), F.from_user.id == ADMIN_ID)
+async def list_birthdays(message: Message, state: FSMContext):
+    await state.clear()
+    users = await load_users()
+
+    items = []
+    for u in users.values():
+        b = u.get("birthday")
+        if not b:
+            continue
+        try:
+            day, month = int(b[:2]), int(b[3:5])
+        except ValueError:
+            continue
+        name = html.escape(u.get("full_name") or "Без имени")
+        uname = f" (@{html.escape(u['username'])})" if u.get("username") else ""
+        items.append(((month, day), f"{name}{uname} — {b}"))
+
+    if not items:
+        await message.answer("🎂 Пока никто не указал день рождения.")
+        return
+
+    items.sort(key=lambda x: x[0])
+    chunk = f"🎂 <b>Дни рождения ({len(items)}):</b>\n\n"
+    for _, line in items:
+        if len(chunk) + len(line) + 1 > 3800:
+            await message.answer(chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        await message.answer(chunk)
+
+
+# ==================================================
 # СТАТИСТИКА ДЛЯ АДМИНА
 # ==================================================
 
@@ -596,12 +830,14 @@ async def show_stats(message: Message, state: FSMContext):
     blocked = sum(1 for u in users.values() if u.get("status") == "blocked")
     active = total - blocked
     pending = len(suggestions)
+    with_bday = sum(1 for u in users.values() if u.get("birthday"))
 
     await message.answer(
         "📊 <b>Статистика</b>\n\n"
         f"👥 Людей в боте: <b>{active}</b>\n"
         f"🚫 Заблокировали бота: <b>{blocked}</b>\n"
-        f"📁 Всего запускали: <b>{total}</b>\n\n"
+        f"📁 Всего запускали: <b>{total}</b>\n"
+        f"🎂 Указали день рождения: <b>{with_bday}</b>\n\n"
         f"📩 Заявок на рассмотрении: <b>{pending}</b>\n\n"
         "✉️ Чтобы написать человеку, отправь ID на первой строке, а текст со второй.",
         reply_markup=main_keyboard(True)
@@ -1042,6 +1278,36 @@ async def send_support_reply(message: Message, state: FSMContext):
 
 
 # ==================================================
+# ДНИ РОЖДЕНИЯ: ВВОД ДАТЫ
+# ==================================================
+
+@dp.message(BirthdayStates.waiting_date)
+async def birthday_receive(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Отправь дату текстом, например 10.05.2004")
+        return
+
+    value = parse_birthday(message.text)
+    if not value:
+        await message.answer(
+            "❌ Не получилось понять дату.\n\n"
+            "Напиши в формате ДД.ММ.ГГГГ, например <code>10.05.2004</code> "
+            "(год можно не указывать: <code>10.05</code>)."
+        )
+        return
+
+    await register_user(message.from_user)
+    await set_birthday(message.from_user.id, value)
+    await state.clear()
+    await message.answer(
+        f"✅ Сохранено: <b>{value}</b>\n\n"
+        "В этот день бот тебя поздравит 🎉\n"
+        "Изменить дату можно в любой момент кнопкой «🎂 День рождения».",
+        reply_markup=main_keyboard(message.from_user.id == ADMIN_ID)
+    )
+
+
+# ==================================================
 # СООБЩЕНИЯ ОТ АДМИНА ПОЛЬЗОВАТЕЛЯМ
 # 1) по ID: первая строка — ID, со второй строки — текст
 # 2) кнопкой «Написать автору» под заявкой
@@ -1140,6 +1406,7 @@ async def main():
     ensure_file(GITHUB_SUGGESTIONS_FILE)
     asyncio.create_task(github_sync_background_loop())
     asyncio.create_task(self_ping_loop())
+    asyncio.create_task(birthday_loop())
     logging.info("Бот запущен!")
     await dp.start_polling(bot)
 
