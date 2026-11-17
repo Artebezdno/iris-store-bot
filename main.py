@@ -388,6 +388,135 @@ async def mark_congratulated(user_id: int, year: int, blocked: bool = False):
     await save_users(users)
 
 
+GREET_LIMIT = 3          # сколько поздравлений друзьям можно отправить...
+GREET_WINDOW = 3600      # ...за этот период (секунд)
+GREET_MAX_LEN = 500      # максимум символов в тексте поздравления
+GREET_PENDING_MAX = 20   # максимум отложенных поздравлений на одного человека
+
+
+def greet_wait_text(wait: int) -> str:
+    minutes = max(1, (wait + 59) // 60)
+    return f"⏳ Ты уже отправил {GREET_LIMIT} поздравления за последний час. Попробуй через {minutes} мин."
+
+
+async def get_greet_wait(user_id: int) -> int:
+    """Сколько секунд ждать до следующего поздравления другу (0 — можно слать)."""
+    users = await load_users()
+    stamps = users.get(str(user_id), {}).get("greet_ts", [])
+    now = time.time()
+    recent = sorted(t for t in stamps if now - t < GREET_WINDOW)
+    if len(recent) < GREET_LIMIT:
+        return 0
+    return int(recent[-GREET_LIMIT] + GREET_WINDOW - now) + 1
+
+
+async def record_greeting(user_id: int):
+    users = await load_users()
+    uid_str = str(user_id)
+    if uid_str not in users:
+        return
+    now = time.time()
+    stamps = [t for t in users[uid_str].get("greet_ts", []) if now - t < GREET_WINDOW]
+    stamps.append(now)
+    users[uid_str]["greet_ts"] = stamps
+    await save_users(users)
+
+
+async def find_user_by_username(username: str):
+    users = await load_users()
+    for uid_str, rec in users.items():
+        if (rec.get("username") or "").lower() == username.lower():
+            return uid_str, rec
+    return None, None
+
+
+async def send_greeting_now(sender, target_id: int, text: str):
+    """Отправляет поздравление сразу. Подпись всегда с именем отправителя."""
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎁 Тебе поздравление от {author_link(sender.id, sender.full_name or 'друга')}:\n\n"
+            f"{html.escape(text)}"
+        )
+        return True, ""
+    except TelegramForbiddenError:
+        await mark_congratulated(target_id, 0, blocked=True)
+        return False, "❌ Не получилось отправить: человек заблокировал бота."
+    except Exception as e:
+        logging.warning(f"Не удалось отправить поздравление {target_id}: {e}")
+        return False, "❌ Не получилось отправить поздравление. Попробуй позже."
+
+
+async def add_pending_greeting(target_id: int, sender, text: str) -> bool:
+    """Откладывает поздравление до дня рождения. Хранится в users.json у получателя."""
+    users = await load_users()
+    uid_str = str(target_id)
+    if uid_str not in users:
+        return False
+    pending = list(users[uid_str].get("pending_greetings", []))
+    if len(pending) >= GREET_PENDING_MAX:
+        return False
+    pending.append({
+        "id": int(time.time() * 1000),
+        "from_id": sender.id,
+        "from_name": sender.full_name or "Друг",
+        "text": text
+    })
+    users[uid_str]["pending_greetings"] = pending
+    await save_users(users)
+    return True
+
+
+async def remove_pending(user_id: int, ids):
+    users = await load_users()
+    uid_str = str(user_id)
+    if uid_str not in users:
+        return
+    left = [g for g in users[uid_str].get("pending_greetings", []) if g.get("id") not in ids]
+    if left:
+        users[uid_str]["pending_greetings"] = left
+    else:
+        users[uid_str].pop("pending_greetings", None)
+    await save_users(users)
+
+
+def build_greeting_chunks(pending):
+    """Собирает отложенные поздравления в одно сообщение (или несколько, если не влезают)."""
+    if len(pending) == 1:
+        g = pending[0]
+        return [
+            f"🎁 Тебе поздравление от {author_link(g['from_id'], g['from_name'])}:\n\n"
+            f"{html.escape(g['text'])}"
+        ]
+
+    chunks, cur = [], "🎁 <b>Поздравления от друзей:</b>\n\n"
+    for g in pending:
+        entry = f"{author_link(g['from_id'], g['from_name'])}:\n{html.escape(g['text'])}\n\n"
+        if len(cur) + len(entry) > 3800:
+            chunks.append(cur.rstrip())
+            cur = ""
+        cur += entry
+    if cur.strip():
+        chunks.append(cur.rstrip())
+    return chunks
+
+
+async def deliver_pending(user_id: int, pending) -> bool:
+    ids = {g.get("id") for g in pending}
+    try:
+        for chunk in build_greeting_chunks(pending):
+            await bot.send_message(user_id, chunk)
+            await asyncio.sleep(0.05)
+    except TelegramForbiddenError:
+        await mark_congratulated(user_id, 0, blocked=True)
+        return False
+    except Exception as e:
+        logging.warning(f"Не удалось отправить поздравления друзей {user_id}: {e}")
+        return False
+    await remove_pending(user_id, ids)
+    return True
+
+
 async def check_birthdays():
     now = datetime.now(BIRTHDAY_TZ)
     if now.hour < BIRTHDAY_HOUR:
@@ -398,33 +527,41 @@ async def check_birthdays():
         bday = u.get("birthday")
         if not bday or u.get("status") == "blocked":
             continue
-        if u.get("last_congrats_year") == now.year:
-            continue  # в этом году уже поздравляли
         if not is_birthday_today(bday, now.date()):
             continue
 
         user_id = u.get("user_id") or int(uid_str)
-        name = html.escape(u.get("full_name") or "друг")
 
-        age_line = ""
-        parts = bday.split(".")
-        if len(parts) == 3:
-            age_line = f"Сегодня тебе исполняется <b>{now.year - int(parts[2])}</b>! "
+        # 1) Поздравление от бота (один раз в год)
+        if u.get("last_congrats_year") != now.year:
+            name = html.escape(u.get("full_name") or "друг")
 
-        text = (
-            f"🎉🎂 <b>С днём рождения, {name}!</b>\n\n"
-            f"{age_line}Желаем отличного настроения, классных людей рядом "
-            "и чтобы всё получалось! 🥳"
-        )
+            age_line = ""
+            parts = bday.split(".")
+            if len(parts) == 3:
+                age_line = f"Сегодня тебе исполняется <b>{now.year - int(parts[2])}</b>! "
 
-        try:
-            await bot.send_message(user_id, text)
-            await mark_congratulated(user_id, now.year)
-        except TelegramForbiddenError:
-            await mark_congratulated(user_id, now.year, blocked=True)
-        except Exception as e:
-            logging.warning(f"Не удалось поздравить {user_id}: {e}")
-        await asyncio.sleep(0.05)
+            text = (
+                f"🎉🎂 <b>С днём рождения, {name}!</b>\n\n"
+                f"{age_line}Желаем отличного настроения, классных людей рядом "
+                "и чтобы всё получалось! 🥳"
+            )
+
+            try:
+                await bot.send_message(user_id, text)
+                await mark_congratulated(user_id, now.year)
+            except TelegramForbiddenError:
+                await mark_congratulated(user_id, now.year, blocked=True)
+                continue
+            except Exception as e:
+                logging.warning(f"Не удалось поздравить {user_id}: {e}")
+                continue
+            await asyncio.sleep(0.05)
+
+        # 2) Поздравления от друзей, которые ждали этого дня
+        pending = u.get("pending_greetings") or []
+        if pending:
+            await deliver_pending(user_id, pending)
 
 
 async def birthday_loop():
@@ -447,6 +584,12 @@ class SuggestionStates(StatesGroup):
 
 class BirthdayStates(StatesGroup):
     waiting_date = State()
+
+
+class GreetStates(StatesGroup):
+    waiting_target = State()
+    waiting_text = State()
+    waiting_choice = State()
 
 
 class SupportStates(StatesGroup):
@@ -522,12 +665,15 @@ FAQ_ITEMS = {
         "Когда пост опубликуют, бот сам пришлёт тебе ссылку на него в канале."
     ),
     "bday": (
-        "🎂 Как указать день рождения?",
-        "🎂 <b>Как указать день рождения?</b>\n\n"
-        "Нажми «🎂 День рождения» в меню и отправь дату в формате ДД.ММ.ГГГГ, например 10.05.2004. "
-        "Год можно не указывать: 10.05.\n\n"
-        "В этот день бот тебя поздравит. Дату можно изменить или удалить в любой момент "
-        "той же кнопкой."
+        "🎂 День рождения и поздравления",
+        "🎂 <b>День рождения и поздравления</b>\n\n"
+        "<b>Своя дата.</b> Нажми «🎂 День рождения» → «📅 Моя дата рождения» и отправь дату "
+        "в формате ДД.ММ.ГГГГ, например 10.05.2004 (год можно не указывать). "
+        "В этот день бот тебя поздравит. Дату можно изменить или удалить в любой момент.\n\n"
+        "<b>Поздравить друга.</b> Нажми «🎁 Поздравить друга», напиши его @юзернейм и текст. "
+        "Друг должен уже пользоваться ботом. Поздравление подписано твоим именем. "
+        "Если день рождения не сегодня, бот предложит отправить сразу или в день рождения.\n\n"
+        "Можно отправлять не больше 3 поздравлений в час."
     ),
     "support": (
         "💬 Как связаться с админом?",
@@ -747,22 +893,78 @@ def birthday_manage_keyboard():
     ]])
 
 
-@dp.message(F.text == "🎂 День рождения")
-async def birthday_open(message: Message, state: FSMContext):
-    await state.clear()
-    await register_user(message.from_user)
+GREET_TARGET_PROMPT = (
+    "🎁 <b>Кого хочешь поздравить?</b>\n\n"
+    "Напиши его @юзернейм"
+)
 
+
+def birthday_menu_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Моя дата рождения", callback_data="bday:mine")],
+        [InlineKeyboardButton(text="🎁 Поздравить друга", callback_data="bday:congrats")]
+    ])
+
+
+def greet_choice_keyboard(has_date: bool):
+    if has_date:
+        rows = [
+            [InlineKeyboardButton(text="⏰ В день рождения", callback_data="greet:later"),
+             InlineKeyboardButton(text="📨 Сейчас", callback_data="greet:now")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="greet:cancel")]
+        ]
+    else:
+        rows = [[
+            InlineKeyboardButton(text="📨 Сейчас", callback_data="greet:now"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="greet:cancel")
+        ]]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_my_birthday(target: Message, user, state: FSMContext):
+    await register_user(user)
     users = await load_users()
-    bday = users.get(str(message.from_user.id), {}).get("birthday")
+    bday = users.get(str(user.id), {}).get("birthday")
 
     if bday:
-        await message.answer(
+        await target.answer(
             f"🎂 <b>Твой день рождения:</b> {bday}\n\nВ этот день бот тебя поздравит 🎉",
             reply_markup=birthday_manage_keyboard()
         )
     else:
         await state.set_state(BirthdayStates.waiting_date)
-        await message.answer(BIRTHDAY_PROMPT, reply_markup=cancel_keyboard())
+        await target.answer(BIRTHDAY_PROMPT, reply_markup=cancel_keyboard())
+
+
+@dp.message(F.text == "🎂 День рождения")
+async def birthday_open(message: Message, state: FSMContext):
+    await state.clear()
+    await register_user(message.from_user)
+    await message.answer(
+        "🎂 <b>День рождения</b>\n\nЧто хочешь сделать?",
+        reply_markup=birthday_menu_keyboard()
+    )
+
+
+@dp.callback_query(F.data == "bday:mine")
+async def birthday_mine(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await show_my_birthday(callback.message, callback.from_user, state)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "bday:congrats")
+async def greet_start(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    if callback.from_user.id != ADMIN_ID:
+        wait = await get_greet_wait(callback.from_user.id)
+        if wait > 0:
+            await callback.answer(greet_wait_text(wait), show_alert=True)
+            return
+    await register_user(callback.from_user)
+    await state.set_state(GreetStates.waiting_target)
+    await callback.message.answer(GREET_TARGET_PROMPT, reply_markup=cancel_keyboard())
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "bday:edit")
@@ -774,9 +976,19 @@ async def birthday_edit(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "bday:delete")
 async def birthday_delete(callback: CallbackQuery):
-    await set_birthday(callback.from_user.id, None)
+    user_id = callback.from_user.id
+    await set_birthday(user_id, None)
+
+    # Ждать больше нечего, поэтому отложенные поздравления друзей уходят сразу
+    users = await load_users()
+    pending = users.get(str(user_id), {}).get("pending_greetings") or []
+    delivered = await deliver_pending(user_id, pending) if pending else False
+
+    text = "🗑 Дата рождения удалена."
+    if delivered:
+        text += "\n\nПоздравления от друзей, которые ждали твоего дня, отправлены сейчас."
     try:
-        await callback.message.edit_text("🗑 Дата рождения удалена.")
+        await callback.message.edit_text(text)
     except TelegramAPIError:
         pass
     await callback.answer()
@@ -1305,6 +1517,148 @@ async def birthday_receive(message: Message, state: FSMContext):
         "Изменить дату можно в любой момент кнопкой «🎂 День рождения».",
         reply_markup=main_keyboard(message.from_user.id == ADMIN_ID)
     )
+
+
+# ==================================================
+# ПОЗДРАВЛЕНИЕ ДРУГА
+# ==================================================
+
+@dp.message(GreetStates.waiting_target)
+async def greet_target(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Напиши @юзернейм текстом.")
+        return
+
+    raw = re.sub(r"^(https?://)?t\.me/", "", message.text.strip(), flags=re.IGNORECASE)
+    raw = raw.lstrip("@").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", raw):
+        await message.answer("❌ Это не похоже на юзернейм. Напиши, например, <code>@ivan</code>")
+        return
+
+    uid_str, rec = await find_user_by_username(raw)
+    if not rec:
+        await message.answer(
+            f"❌ Не нашёл @{html.escape(raw)}.\n\n"
+            "Поздравить можно только тех, кто уже пользуется ботом. "
+            "Попробуй другой юзернейм или нажми «Отмена»."
+        )
+        return
+
+    target_id = int(uid_str)
+    if target_id == message.from_user.id:
+        await message.answer("❌ Себя поздравлять не нужно, бот сделает это сам. Напиши другой юзернейм.")
+        return
+    if rec.get("status") == "blocked":
+        await message.answer("❌ Этот человек заблокировал бота, поздравление не дойдёт. Напиши другой юзернейм.")
+        return
+
+    name = rec.get("full_name") or raw
+    await state.update_data(target_id=target_id, target_name=name)
+    await state.set_state(GreetStates.waiting_text)
+    await message.answer(
+        f"✅ Нашёл: <b>{html.escape(name)}</b> (@{html.escape(rec.get('username') or raw)})\n"
+        "Напиши текст поздравления:"
+    )
+
+
+@dp.message(GreetStates.waiting_text)
+async def greet_text(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Отправь поздравление текстом.")
+        return
+
+    text = message.text.strip()
+    if len(text) > GREET_MAX_LEN:
+        await message.answer(f"❌ Слишком длинно: максимум {GREET_MAX_LEN} символов, сейчас {len(text)}. Сократи текст.")
+        return
+
+    sender = message.from_user
+    is_admin = sender.id == ADMIN_ID
+
+    if not is_admin:
+        wait = await get_greet_wait(sender.id)
+        if wait > 0:
+            await state.clear()
+            await message.answer(greet_wait_text(wait), reply_markup=main_keyboard(False))
+            return
+
+    data = await state.get_data()
+    target_id = data["target_id"]
+    name = html.escape(data["target_name"])
+
+    users = await load_users()
+    bday = users.get(str(target_id), {}).get("birthday")
+    today = datetime.now(BIRTHDAY_TZ).date()
+
+    # День рождения именно сегодня: отправляем сразу
+    if bday and is_birthday_today(bday, today):
+        ok, err = await send_greeting_now(sender, target_id, text)
+        await state.clear()
+        if ok:
+            await record_greeting(sender.id)
+            await message.answer(
+                f"✅ Поздравление отправлено: {name}.\nКак раз сегодня день рождения!",
+                reply_markup=main_keyboard(is_admin)
+            )
+        else:
+            await message.answer(err, reply_markup=main_keyboard(is_admin))
+        return
+
+    await state.update_data(text=text)
+    await state.set_state(GreetStates.waiting_choice)
+    if bday:
+        await message.answer(
+            f"🎂 День рождения у {name}: <b>{bday[:5]}</b>.\nЧто сделать с поздравлением?",
+            reply_markup=greet_choice_keyboard(True)
+        )
+    else:
+        await message.answer(
+            f"Дата рождения у {name} не указана.\nОтправить поздравление сейчас?",
+            reply_markup=greet_choice_keyboard(False)
+        )
+
+
+@dp.callback_query(GreetStates.waiting_choice, F.data.startswith("greet:"))
+async def greet_choice(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    data = await state.get_data()
+    sender = callback.from_user
+    target_id = data.get("target_id")
+    text = data.get("text")
+    name = html.escape(data.get("target_name") or "")
+    await state.clear()
+
+    if action == "now":
+        ok, err = await send_greeting_now(sender, target_id, text)
+        if ok:
+            await record_greeting(sender.id)
+            result = f"✅ Поздравление отправлено: {name}."
+        else:
+            result = err
+    elif action == "later":
+        users = await load_users()
+        bday = users.get(str(target_id), {}).get("birthday")
+        if not bday:
+            result = "⚠️ Дату рождения уже удалили, поздравление не сохранено. Отправь его заново."
+        elif await add_pending_greeting(target_id, sender, text):
+            await record_greeting(sender.id)
+            result = f"✅ Поздравление для {name} будет отправлено {bday[:5]}."
+        else:
+            result = f"❌ Для {name} уже накопилось слишком много поздравлений. Отправь своё сейчас."
+    else:
+        result = "❌ Отменено."
+
+    try:
+        await callback.message.edit_text(result)
+    except TelegramAPIError:
+        pass
+    await callback.message.answer("Главное меню:", reply_markup=main_keyboard(sender.id == ADMIN_ID))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("greet:"))
+async def greet_stale(callback: CallbackQuery):
+    await callback.answer("Это сообщение устарело. Начни заново через «🎂 День рождения».", show_alert=True)
 
 
 # ==================================================
