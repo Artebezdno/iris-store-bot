@@ -4,7 +4,10 @@
         "username": "andreyko_Ol",
         "full_name": "Андрей",
         "status": "active",
-        "last_post_ts": 1794075708.6760602
+        "last_post_ts": 1794075708.6760602,
+        "greet_ts": [
+            1794930080.3774943
+        ]
     },
     "7837011810": {
         "user_id": 7837011810,
