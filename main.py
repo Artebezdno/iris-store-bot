@@ -610,7 +610,7 @@ def main_keyboard(is_admin: bool = False):
         [KeyboardButton(text="ℹ️ FAQ"), KeyboardButton(text="🎂 День рождения")]
     ]
     if is_admin:
-        keyboard.append([KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="📊 Статистика")])
+        keyboard.append([KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📋 Заявки")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -1054,6 +1054,70 @@ async def show_stats(message: Message, state: FSMContext):
         "✉️ Чтобы написать человеку, отправь ID на первой строке, а текст со второй.",
         reply_markup=main_keyboard(True)
     )
+
+
+# ==================================================
+# ОЧЕРЕДЬ ЗАЯВОК ДЛЯ АДМИНА
+# ==================================================
+
+QUEUE_SHOW_MAX = 20
+
+
+async def send_request_card(req: dict):
+    """Отправляет админу заявку с кнопками «Принять / Редактировать / Отклонить / Написать автору»."""
+    request_id = req["id"]
+    kb = admin_keyboard(request_id, req["user_id"])
+    anon_status = "🕶 Анонимно" if req.get("is_anon") else "👤 С автором"
+    ptype = req.get("post_type")
+
+    if ptype == "text":
+        await bot.send_message(
+            ADMIN_ID,
+            f"📩 Заявка №{request_id} ({anon_status})\n\n📝 Текст:\n{html.escape(req.get('post_text', ''))}",
+            reply_markup=kb
+        )
+    elif ptype == "photo":
+        cap = f"📩 Заявка №{request_id} ({anon_status})"
+        if req.get("post_caption"):
+            cap += f"\n\n📝 Подпись:\n{html.escape(req['post_caption'])}"
+        await bot.send_photo(ADMIN_ID, photo=req["file_id"], caption=cap[:1024], reply_markup=kb)
+    elif ptype == "video":
+        cap = f"📩 Заявка №{request_id} ({anon_status})"
+        if req.get("post_caption"):
+            cap += f"\n\n📝 Подпись:\n{html.escape(req['post_caption'])}"
+        await bot.send_video(ADMIN_ID, video=req["file_id"], caption=cap[:1024], reply_markup=kb)
+    elif ptype == "sticker":
+        await bot.send_sticker(ADMIN_ID, sticker=req["file_id"])
+        await bot.send_message(ADMIN_ID, f"📩 Заявка №{request_id} (Стикер | {anon_status})", reply_markup=kb)
+
+
+@dp.message(Command("queue"), F.from_user.id == ADMIN_ID)
+@dp.message(F.text == "📋 Заявки", F.from_user.id == ADMIN_ID)
+async def show_queue(message: Message, state: FSMContext):
+    await state.clear()
+    suggestions = await load_suggestions()
+
+    if not suggestions:
+        await message.answer("✅ Заявок на рассмотрении нет.", reply_markup=main_keyboard(True))
+        return
+
+    items = list(suggestions.values())
+    await message.answer(
+        f"📋 Заявок на рассмотрении: <b>{len(items)}</b>. Присылаю с кнопками:",
+        reply_markup=main_keyboard(True)
+    )
+
+    for req in items[:QUEUE_SHOW_MAX]:
+        try:
+            await send_request_card(req)
+        except Exception as e:
+            logging.warning(f"Не удалось показать заявку {req.get('id')}: {e}")
+        await asyncio.sleep(0.1)
+
+    if len(items) > QUEUE_SHOW_MAX:
+        await message.answer(
+            f"Показано {QUEUE_SHOW_MAX} из {len(items)}. Обработай эти и нажми «📋 Заявки» снова."
+        )
 
 
 # ==================================================
