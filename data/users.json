@@ -81,7 +81,8 @@
         "full_name": "Ваня",
         "status": "active",
         "last_support_ts": 1794248592.6316795,
-        "birthday": "21.11"
+        "birthday": "21.11",
+        "last_congrats_year": 2026
     },
     "7437000696": {
         "user_id": 7437000696,
